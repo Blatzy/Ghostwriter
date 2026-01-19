@@ -8,36 +8,67 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches
 import pptx
 
-from ghostwriter.modules.reportwriter.base.pptx import SLD_LAYOUT_TITLE, SLD_LAYOUT_TITLE_AND_CONTENT, ExportBasePptx, delete_paragraph, get_textframe, write_bullet, write_objective_list
+from ghostwriter.modules.reportwriter.base.pptx import (
+    ExportBasePptx,
+    delete_paragraph,
+    get_textframe,
+    write_bullet,
+    write_objective_list,
+    create_static_slide,
+    set_text_preserving_format,
+)
 from ghostwriter.modules.reportwriter.project.base import ExportProjectBase
 
 
 class ProjectSlidesMixin:
     """
-    Adds a function for generating Project-related slides - shared between the project and report exports
+    Adds functions for generating Project-related slides - shared between the project and report exports
     """
 
-    def create_project_slides(self, base_context):
-        # Add a title slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE]
-        slide = self.ppt_presentation.slides.add_slide(slide_layout)
-        shapes = slide.shapes
-        title_shape = shapes.title
-        body_shape = shapes.placeholders[1]
-        title_shape.text = f'{self.data["client"]["name"]} {self.data["project"]["type"]}'
-        text_frame = get_textframe(body_shape)
-        # Use ``text_frame.text`` for first line/paragraph or ``text_frame.paragraphs[0]``
-        text_frame.text = "Technical Outbrief"
-        p = text_frame.add_paragraph()
-        p.text = dateformat(date.today(), settings.DATE_FORMAT)
+    def create_title_slide(self, config, base_context, jinja_context):
+        """Create the title slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
 
-        # Add Agenda slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Agenda"
-        body_shape = shapes.placeholders[1]
+
+        title_shape = self.get_title_shape(slide, shapes)
+        body_shape = self.get_body_shape(slide, shapes)
+
+        if title_shape:
+            set_text_preserving_format(title_shape, f'{self.data["client"]["name"]} {self.data["project"]["type"]}')
+
+        if body_shape:
+            text_frame = get_textframe(body_shape)
+            # Preserve first paragraph formatting for main text
+            if text_frame.paragraphs:
+                text_frame.paragraphs[0].text = "Technical Outbrief"
+            else:
+                text_frame.text = "Technical Outbrief"
+            p = text_frame.add_paragraph()
+            p.text = dateformat(date.today(), settings.DATE_FORMAT)
+
+    def create_agenda_slide(self, config, base_context, jinja_context):
+        """Create the agenda slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
+        slide = self.ppt_presentation.slides.add_slide(slide_layout)
+        shapes = slide.shapes
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Agenda")
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
         text_frame.clear()
         delete_paragraph(text_frame.paragraphs[0])
@@ -51,31 +82,51 @@ class ProjectSlidesMixin:
         write_bullet(text_frame, "Findings and Recommendations Overview", 0)
         write_bullet(text_frame, "Next Steps", 0)
 
-        # Add Introduction slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+    def create_introduction_slide(self, config, base_context, jinja_context):
+        """Create the introduction/team slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Introduction"
-        body_shape = shapes.placeholders[1]
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Introduction")
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
         text_frame.clear()
 
         if self.data["team"]:
-            # Frame needs at least one paragraph to be valid, so don't delete the paragraph
-            # if there are no team members
             delete_paragraph(text_frame.paragraphs[0])
             for member in self.data["team"]:
                 write_bullet(text_frame, f"{member['name']} – {member['role']}", 0)
                 write_bullet(text_frame, member["email"], 1)
 
-        # Add Assessment Details slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+    def create_assessment_details_slide(self, config, base_context, jinja_context):
+        """Create the assessment details slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Assessment Details"
-        body_shape = shapes.placeholders[1]
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Assessment Details")
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
         text_frame.clear()
         delete_paragraph(text_frame.paragraphs[0])
@@ -89,15 +140,14 @@ class ProjectSlidesMixin:
             1,
         )
 
-        finding_body_shape = shapes.placeholders[1]
         self.render_rich_text_pptx(
             base_context["project"]["description_rt"],
             slide=slide,
-            shape=finding_body_shape,
+            shape=body_shape,
         )
 
-        # The  method adds a new paragraph, so we need to get the last one to increase the indent level
-        text_frame = get_textframe(finding_body_shape)
+        # The method adds a new paragraph, so we need to get the last one to increase the indent level
+        text_frame = get_textframe(body_shape)
         p = text_frame.paragraphs[-1]
         p.level = 1
 
@@ -125,24 +175,40 @@ class ProjectSlidesMixin:
                 write_bullet(text_frame, "Tertiary Objectives", 0)
                 write_objective_list(text_frame, tertiary_objs)
 
-        # Add Methodology slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+    def create_methodology_slide(self, config, base_context, jinja_context):
+        """Create the methodology slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Methodology"
 
-        # Add Timeline slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Methodology")
+
+    def create_timeline_slide(self, config, base_context, jinja_context):
+        """Create the assessment timeline slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Assessment Timeline"
 
-        # Delete the default text placeholder
-        textbox = shapes[1]
-        sp = textbox.element
-        sp.getparent().remove(sp)
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Assessment Timeline")
+
+        # Delete the default text placeholder if present
+        body_shape = self.get_body_shape(slide, shapes)
+        if body_shape:
+            sp = body_shape.element
+            sp.getparent().remove(sp)
+
         # Add a table
         rows = 4
         columns = 2
@@ -180,17 +246,59 @@ class ProjectSlidesMixin:
             cell.text_frame.paragraphs[0].alignment = PP_ALIGN.CENTER
             cell.vertical_anchor = MSO_ANCHOR.MIDDLE
 
-        # Add Attack Path Overview slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+    def create_attack_path_slide(self, config, base_context, jinja_context):
+        """Create the attack path overview slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Attack Path Overview"
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Attack Path Overview")
 
 
 class ExportProjectPptx(ExportBasePptx, ExportProjectBase, ProjectSlidesMixin):
     def run(self) -> io.BytesIO:
         base_context = self.map_rich_texts()
-        self.create_project_slides(base_context)
+        jinja_context = self.get_slide_context()
+
+        # Get enabled slides sorted by position
+        slides_config = self.slide_mapping_manager.get_slides_by_position()
+
+        # Process each slide type according to configuration
+        for slide_config in slides_config:
+            if not slide_config.enabled:
+                continue
+
+            slide_type = slide_config.type
+
+            # Route to appropriate creation method
+            if slide_type == "title":
+                self.create_title_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "agenda":
+                self.create_agenda_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "introduction":
+                self.create_introduction_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "assessment_details":
+                self.create_assessment_details_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "methodology":
+                self.create_methodology_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "timeline":
+                self.create_timeline_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "attack_path":
+                self.create_attack_path_slide(slide_config, base_context, jinja_context)
+            elif slide_config.mode == "static":
+                # Handle custom static slides
+                create_static_slide(
+                    self.ppt_presentation,
+                    slide_config.layout_index,
+                    self.jinja_env,
+                    jinja_context,
+                )
+
         self.process_footers()
         return super().run()

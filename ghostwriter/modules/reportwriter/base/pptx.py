@@ -2,9 +2,10 @@
 import io
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
 from typing import List, Tuple
 
+import jinja2
 from django.conf import settings
 from django.utils.dateformat import format as dateformat
 from bs4 import BeautifulSoup
@@ -72,6 +73,13 @@ class ExportBasePptx(ExportBase):
 
         self.company_config = CompanyInformation.get_solo()
 
+        # Initialize slide mapping manager
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+        self.slide_mapping_manager = SlideMappingManager(
+            report_template.slide_mapping,
+            self.ppt_presentation
+        )
+
     def render_rich_text_pptx(self, rich_text: LazilyRenderedTemplate, slide, shape):
         """
         Renders a `LazilyRenderedTemplate`, converting the HTML from the TinyMCE rich text editor and inserting it into the passed in shape and slide.
@@ -86,6 +94,163 @@ class ExportBasePptx(ExportBase):
             ),
             getattr(rich_text, "location", None)
         )
+
+    def get_slide_context(self) -> dict:
+        """
+        Get Jinja2 context for static slide rendering.
+
+        Returns:
+            Dictionary with client, project, report, and other data
+        """
+        # Helper function to format dates
+        def format_date(date_obj):
+            """Format a date object to string."""
+            if date_obj is None:
+                return ""
+            if isinstance(date_obj, str):
+                return date_obj
+            if hasattr(date_obj, 'strftime'):
+                from django.conf import settings
+                return date_obj.strftime(settings.DATE_FORMAT.replace('%', '%%').replace('%%', '%'))
+            return str(date_obj)
+
+        # Deep copy data to avoid modifying original
+        import copy
+        context_data = copy.deepcopy(self.data)
+
+        # Ensure dates are formatted as strings for Jinja2
+        if "project" in context_data:
+            for date_field in ["start_date", "end_date"]:
+                if date_field in context_data["project"]:
+                    context_data["project"][date_field] = format_date(context_data["project"][date_field])
+
+        if "report" in context_data:
+            for date_field in ["complete_date", "created", "last_update"]:
+                if date_field in context_data["report"]:
+                    context_data["report"][date_field] = format_date(context_data["report"][date_field])
+
+        context = {
+            "client": context_data.get("client", {}),
+            "project": context_data.get("project", {}),
+            "report": context_data.get("report", {}),
+            "team": context_data.get("team", []),
+            "company": {
+                "name": self.company_config.company_name,
+                "email": self.company_config.company_email,
+                "twitter": self.company_config.company_twitter,
+            },
+            "now": datetime.now(),
+        }
+
+        # Log available context for debugging
+        logger.debug(
+            "Jinja2 context for static slides - client: %s, project keys: %s, report keys: %s",
+            context.get("client", {}).get("name", "N/A"),
+            list(context.get("project", {}).keys()),
+            list(context.get("report", {}).keys())
+        )
+
+        return context
+
+    def get_slide_layout(self, slide_type: str):
+        """
+        Get the slide layout for a given slide type using the mapping.
+
+        Args:
+            slide_type: Type of slide (e.g., 'title', 'finding', etc.)
+
+        Returns:
+            Slide layout object, or None if slide is disabled
+        """
+        if not self.slide_mapping_manager.is_slide_enabled(slide_type):
+            return None
+
+        layout_index = self.slide_mapping_manager.get_layout_index(slide_type, fallback=1)
+        return self.ppt_presentation.slide_layouts[layout_index]
+
+    def get_title_shape(self, slide, shapes):
+        """
+        Safely get the title placeholder from a slide.
+
+        Args:
+            slide: The slide object
+            shapes: The shapes collection from the slide
+
+        Returns:
+            Title shape if found, None otherwise
+        """
+        try:
+            title = shapes.title
+            if title is not None:
+                return title
+        except:
+            pass
+
+        # Fallback: try to find placeholder[0] (often the title)
+        try:
+            if 0 in shapes.placeholders:
+                return shapes.placeholders[0]
+        except:
+            pass
+
+        return None
+
+    def get_placeholder(self, shapes, idx):
+        """
+        Safely get a placeholder by index.
+
+        Args:
+            shapes: The shapes collection from the slide
+            idx: Placeholder index to retrieve
+
+        Returns:
+            Placeholder shape if found, None otherwise
+        """
+        try:
+            if idx in shapes.placeholders:
+                return shapes.placeholders[idx]
+        except:
+            pass
+        return None
+
+    def get_body_shape(self, slide, shapes):
+        """
+        Safely get the body placeholder from a slide, with fallback.
+
+        Args:
+            slide: The slide object
+            shapes: The shapes collection from the slide
+
+        Returns:
+            Body shape if found, None otherwise
+        """
+        # Try placeholder[1] first (most common)
+        placeholder = self.get_placeholder(shapes, 1)
+        if placeholder:
+            return placeholder
+
+        # Fallback: find any text placeholder except title
+        for shape in shapes:
+            if shape.has_text_frame and shape != shapes.title:
+                return shape
+
+        return None
+
+    def get_named_placeholder(self, shapes, name):
+        """
+        Get a placeholder by its name (as defined in PowerPoint master).
+
+        Args:
+            shapes: The shapes collection from the slide
+            name: Name of the placeholder to find
+
+        Returns:
+            Placeholder shape if found, None otherwise
+        """
+        for shape in shapes.placeholders:
+            if hasattr(shape, 'name') and shape.name.lower() == name.lower():
+                return shape
+        return None
 
     def process_footers(self):
         """
@@ -129,7 +294,7 @@ class ExportBasePptx(ExportBase):
         return out
 
     @classmethod
-    def lint(cls, template_loc: str) -> Tuple[List[str], List[str]]:
+    def lint(cls, template_loc: str, report_template=None) -> Tuple[List[str], List[str]]:
         warnings = []
         errors = []
         try:
@@ -146,8 +311,22 @@ class ExportBasePptx(ExportBase):
             logger.info("Slide count was %s", slide_count)
             if slide_count > 0:
                 warnings.append(
-                    "Template can be used, but it has slides when it should be empty (see documentation)"
+                    "Template contains slides. If using static slide layouts, this is acceptable. "
+                    "Ensure your slide master contains the layouts you want to reference."
                 )
+
+            # Test 3: Validate slide mapping if available
+            if report_template and report_template.slide_mapping:
+                from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+
+                manager = SlideMappingManager(
+                    report_template.slide_mapping,
+                    template_document
+                )
+                mapping_warnings, mapping_errors = manager.validate()
+                warnings.extend(mapping_warnings)
+                errors.extend(mapping_errors)
+
         except ReportExportTemplateError as error:
             logger.exception("Template failed linting: %s", error)
             errors.append(f"Linting failed: {error}")
@@ -250,3 +429,154 @@ def delete_paragraph(par):
         parent_element.remove(p)
     else:
         logger.warning("Could not delete paragraph in because it had no parent element")
+
+
+def set_text_preserving_format(shape, text):
+    """
+    Set text in a shape while preserving the formatting from the master/layout.
+
+    If the shape has existing text with formatting, this function preserves
+    all formatting (font, size, color, etc.) and only replaces the text content.
+
+    Args:
+        shape: The shape to set text in
+        text: The new text content (can be empty string)
+    """
+    if not shape or not shape.has_text_frame:
+        return
+
+    text_frame = shape.text_frame
+
+    # If there are existing paragraphs with runs, preserve formatting
+    if text_frame.paragraphs:
+        first_para = text_frame.paragraphs[0]
+
+        # If there are runs with formatting, use the first run's formatting
+        if first_para.runs:
+            first_run = first_para.runs[0]
+
+            # Clear all runs but keep paragraph structure
+            for run in list(first_para.runs):
+                run.text = ""
+
+            # Set new text in first run (preserves its formatting)
+            first_run.text = text
+
+            # Remove extra runs
+            for run in list(first_para.runs[1:]):
+                r = run._r
+                r.getparent().remove(r)
+        else:
+            # No runs, just set text on paragraph (will use default formatting)
+            first_para.text = text
+
+        # Remove extra paragraphs
+        for para in list(text_frame.paragraphs[1:]):
+            delete_paragraph(para)
+    else:
+        # No paragraphs at all, set text directly
+        text_frame.text = text
+
+
+def add_paragraph_preserving_format(text_frame, text, level=0):
+    """
+    Add a paragraph while trying to preserve formatting from the layout.
+
+    Args:
+        text_frame: The text frame to add paragraph to
+        text: The text content
+        level: The indentation level (0-8)
+
+    Returns:
+        The created paragraph
+    """
+    p = text_frame.add_paragraph()
+    p.text = text
+    p.level = level
+    return p
+
+
+def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, context: dict):
+    """
+    Render Jinja2 templates in all paragraphs of a text frame.
+
+    Args:
+        text_frame: PPTX text frame object
+        jinja_env: Jinja2 environment for rendering
+        context: Template context dictionary
+    """
+    for paragraph in text_frame.paragraphs:
+        for run in paragraph.runs:
+            if run.text:
+                original_text = run.text
+                try:
+                    template = jinja_env.from_string(run.text)
+                    rendered = template.render(context)
+                    run.text = rendered
+
+                    # Log if variable wasn't replaced (still contains {{ }})
+                    if '{{' in rendered and '}}' in rendered:
+                        logger.warning(
+                            "Jinja2 variable may not have been replaced: '%s' -> '%s'. Available keys: %s",
+                            original_text[:100],
+                            rendered[:100],
+                            list(context.keys())
+                        )
+                except jinja2.exceptions.UndefinedError as e:
+                    logger.error(
+                        "Jinja2 undefined variable in '%s': %s. Available context keys: %s",
+                        original_text[:100],
+                        str(e),
+                        list(context.keys())
+                    )
+                    # Keep original text if rendering fails
+                except Exception as e:
+                    logger.warning("Failed to render Jinja2 in text run '%s': %s", original_text[:100], e)
+
+
+def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict):
+    """
+    Recursively render Jinja2 templates in a shape and its children.
+
+    Args:
+        shape: PPTX shape object
+        jinja_env: Jinja2 environment for rendering
+        context: Template context dictionary
+    """
+    # Handle text frames
+    if shape.has_text_frame:
+        render_jinja2_in_textframe(shape.text_frame, jinja_env, context)
+
+    # Handle tables
+    if shape.has_table:
+        for row in shape.table.rows:
+            for cell in row.cells:
+                render_jinja2_in_textframe(cell.text_frame, jinja_env, context)
+
+    # Handle grouped shapes
+    if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
+        for child_shape in shape.shapes:
+            render_jinja2_in_shape(child_shape, jinja_env, context)
+
+
+def create_static_slide(presentation, layout_index: int, jinja_env: jinja2.Environment, context: dict):
+    """
+    Create a static slide by copying a layout and rendering Jinja2 templates.
+
+    Args:
+        presentation: PPTX Presentation object
+        layout_index: Index of layout to use
+        jinja_env: Jinja2 environment for rendering
+        context: Template context dictionary
+
+    Returns:
+        The created slide
+    """
+    slide_layout = presentation.slide_layouts[layout_index]
+    slide = presentation.slides.add_slide(slide_layout)
+
+    # Render Jinja2 in all shapes
+    for shape in slide.shapes:
+        render_jinja2_in_shape(shape, jinja_env, context)
+
+    return slide

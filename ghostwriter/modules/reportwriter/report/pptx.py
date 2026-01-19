@@ -5,7 +5,15 @@ from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches
 import pptx
 
-from ghostwriter.modules.reportwriter.base.pptx import SLD_LAYOUT_FINAL, SLD_LAYOUT_TITLE_AND_CONTENT, ExportBasePptx, delete_paragraph, get_textframe, prepare_for_pptx, write_bullet
+from ghostwriter.modules.reportwriter.base.pptx import (
+    ExportBasePptx,
+    delete_paragraph,
+    get_textframe,
+    prepare_for_pptx,
+    write_bullet,
+    create_static_slide,
+    set_text_preserving_format,
+)
 from ghostwriter.modules.reportwriter.project.pptx import ProjectSlidesMixin
 from ghostwriter.modules.reportwriter.report.base import ExportReportBase
 from ghostwriter.modules.reportwriter.richtext.pptx import HtmlToPptxWithEvidence
@@ -16,34 +24,85 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
         """Generate a complete PowerPoint slide deck for the current report."""
 
         base_context = self.map_rich_texts()
+        jinja_context = self.get_slide_context()
 
-        # Loop through the findings to create slides
-        findings_stats = {}
+        # Get enabled slides sorted by position
+        slides_config = self.slide_mapping_manager.get_slides_by_position()
 
-        # Calculate finding stats
-        for finding in base_context["findings"]:
-            findings_stats[finding["severity"]] = 0
+        # Process each slide type according to configuration
+        for slide_config in slides_config:
+            if not slide_config.enabled:
+                continue
 
-        for finding in base_context["findings"]:
-            findings_stats[finding["severity"]] += 1
+            slide_type = slide_config.type
 
-        self.create_project_slides(base_context)
+            # Route to appropriate creation method
+            if slide_type == "title":
+                self.create_title_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "agenda":
+                self.create_agenda_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "introduction":
+                self.create_introduction_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "assessment_details":
+                self.create_assessment_details_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "methodology":
+                self.create_methodology_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "timeline":
+                self.create_timeline_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "attack_path":
+                self.create_attack_path_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "observations_overview":
+                self.create_observations_overview_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "observation":
+                self.create_observation_slides(slide_config, base_context, jinja_context)
+            elif slide_type == "findings_overview":
+                self.create_findings_overview_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "finding":
+                self.create_finding_slides(slide_config, base_context, jinja_context)
+            elif slide_type == "recommendations":
+                self.create_recommendations_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "next_steps":
+                self.create_next_steps_slide(slide_config, base_context, jinja_context)
+            elif slide_type == "final":
+                self.create_final_slide(slide_config, base_context, jinja_context)
+            elif slide_config.mode == "static":
+                # Handle custom static slides
+                create_static_slide(
+                    self.ppt_presentation,
+                    slide_config.layout_index,
+                    self.jinja_env,
+                    jinja_context,
+                )
 
-        # Add Observations slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+        self.process_footers()
+        return super().run()
+
+    def create_observations_overview_slide(self, config, base_context, jinja_context):
+        """Create the observations overview slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        body_shape = shapes.placeholders[1]
-        title_shape.text = "Positive Observations"
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Positive Observations")
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
 
         # If there are observations then write a table
         if len(base_context["observations"]) > 0:
             # Delete the default text placeholder
-            textbox = shapes[1]
-            sp = textbox.element
+            sp = body_shape.element
             sp.getparent().remove(sp)
+
             # Add a table
             rows = len(base_context["observations"]) + 1
             columns = 1
@@ -71,59 +130,65 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
         else:
             write_bullet(text_frame, "No observations", 0)
 
-        # Create slide for each observation
+    def create_observation_slides(self, config, base_context, jinja_context):
+        """
+        Create individual observation slides.
+
+        Uses Jinja2 template variables in the layout placeholders:
+        - {{ title }} : Observation title
+        - {{ description }} : Description of the observation
+
+        Simply add these variables to your PowerPoint layout text and they will be replaced.
+        """
+        if config.mode == "static":
+            # Static mode doesn't make sense for dynamic content, skip
+            return
+
         for observation in base_context["observations"]:
-            slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+            slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
             observation_slide = self.ppt_presentation.slides.add_slide(slide_layout)
-            shapes = observation_slide.shapes
-            title_shape = shapes.title
 
-            # Prepare text frame
-            observation_body_shape = shapes.placeholders[1]
-            if observation_body_shape.has_text_frame:
-                text_frame = get_textframe(observation_body_shape)
-                text_frame.clear()
-                delete_paragraph(text_frame.paragraphs[0])
-            else:
-                text_frame = None
+            # Create Jinja2 context for this specific observation
+            observation_context = {
+                "title": observation.get("title", ""),
+                "description": prepare_for_pptx(observation.get("description", "")),
+            }
 
-            # Set slide title to title + [severity]
-            title_shape.text = f'{observation["title"]}'
+            # Render Jinja2 variables in all shapes of the slide
+            from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
+            for shape in observation_slide.shapes:
+                render_jinja2_in_shape(shape, self.jinja_env, observation_context)
 
-            # Add description to the slide body (other sections will appear in the notes)
-            if observation.get("description", "").strip():
-                self.render_rich_text_pptx(
-                    observation["description_rt"],
-                    slide=observation_slide,
-                    shape=observation_body_shape,
-                )
-            else:
-                par = observation_body_shape.text_frame.add_paragraph()
-                run = par.add_run()
-                run.text = "No description provided"
-
+            # Add evidence images
             for ev in observation.get("evidence", []):
                 HtmlToPptxWithEvidence.make_evidence(observation_slide, ev)
 
-            # Ensure there is at least one paragraph, as required by the spec
-            if text_frame is not None and not text_frame.paragraphs:
-                text_frame.add_paragraph()
+    def create_findings_overview_slide(self, config, base_context, jinja_context):
+        """Create the findings overview slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
 
-        # Add Findings Overview Slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        body_shape = shapes.placeholders[1]
-        title_shape.text = "Findings Overview"
+
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Findings Overview")
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
 
         # If there are findings then write a table of findings and severity ratings
         if len(base_context["findings"]) > 0:
             # Delete the default text placeholder
-            textbox = shapes[1]
-            sp = textbox.element
+            sp = body_shape.element
             sp.getparent().remove(sp)
+
             # Add a table
             rows = len(base_context["findings"]) + 1
             columns = 2
@@ -164,45 +229,60 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
         else:
             write_bullet(text_frame, "No findings", 0)
 
-        # Create slide for each finding
+    def create_finding_slides(self, config, base_context, jinja_context):
+        """
+        Create individual finding slides.
+
+        Uses Jinja2 template variables in the layout placeholders:
+        - {{ title }} : Finding title
+        - {{ severity }} : Severity level (Critical, High, Medium, Low)
+        - {{ description }} : Description of the finding
+        - {{ impact }} : Impact description
+        - {{ affected_entities }} : Affected systems/entities
+        - {{ mitigation }} or {{ recommendation }} : Mitigation recommendations
+        - {{ replication }} or {{ replication_steps }} : Replication steps
+        - {{ host_detection }} : Host detection techniques
+        - {{ network_detection }} : Network detection techniques
+        - {{ references }} : References
+
+        Simply add these variables to your PowerPoint layout text and they will be replaced.
+        """
+        if config.mode == "static":
+            # Static mode doesn't make sense for dynamic content, skip
+            return
+
         for finding in base_context["findings"]:
-            slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+            slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
             finding_slide = self.ppt_presentation.slides.add_slide(slide_layout)
-            shapes = finding_slide.shapes
-            title_shape = shapes.title
 
-            # Prepare text frame
-            finding_body_shape = shapes.placeholders[1]
-            if finding_body_shape.has_text_frame:
-                text_frame = get_textframe(finding_body_shape)
-                text_frame.clear()
-                delete_paragraph(text_frame.paragraphs[0])
-            else:
-                text_frame = None
+            # Create Jinja2 context for this specific finding
+            finding_context = {
+                "title": finding.get("title", ""),
+                "severity": finding.get("severity", ""),
+                "description": prepare_for_pptx(finding.get("description", "")),
+                "impact": prepare_for_pptx(finding.get("impact", "")),
+                "affected_entities": prepare_for_pptx(finding.get("affected_entities", "")),
+                "mitigation": prepare_for_pptx(finding.get("recommendation", "")),
+                "recommendation": prepare_for_pptx(finding.get("recommendation", "")),
+                "replication": prepare_for_pptx(finding.get("replication_steps", "")),
+                "replication_steps": prepare_for_pptx(finding.get("replication_steps", "")),
+                "host_detection": prepare_for_pptx(finding.get("host_detection_techniques", "")),
+                "network_detection": prepare_for_pptx(finding.get("network_detection_techniques", "")),
+                "references": prepare_for_pptx(finding.get("references", "")),
+                "cvss_score": finding.get("cvss_score", ""),
+                "cvss_vector": finding.get("cvss_vector", ""),
+            }
 
-            # Set slide title to title + [severity]
-            title_shape.text = f'{finding["title"]} [{finding["severity"]}]'
+            # Render Jinja2 variables in all shapes of the slide
+            from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
+            for shape in finding_slide.shapes:
+                render_jinja2_in_shape(shape, self.jinja_env, finding_context)
 
-            # Add description to the slide body (other sections will appear in the notes)
-            if finding.get("description", "").strip():
-                self.render_rich_text_pptx(
-                    finding["description_rt"],
-                    slide=finding_slide,
-                    shape=finding_body_shape,
-                )
-            else:
-                par = text_frame.add_paragraph()
-                run = par.add_run()
-                run.text = "No description provided"
-
+            # Add evidence images
             for ev in finding.get("evidence", []):
                 HtmlToPptxWithEvidence.make_evidence(finding_slide, ev)
 
-            # Ensure there is at least one paragraph, as required by the spec
-            if text_frame is not None and not text_frame.paragraphs:
-                text_frame.add_paragraph()
-
-            # Add all finding data to the notes section for easier reference during edits
+            # Add all finding data to the notes section
             entities = prepare_for_pptx(finding["affected_entities"])
             impact = prepare_for_pptx(finding["impact"])
             host_detection = prepare_for_pptx(finding["host_detection_techniques"])
@@ -214,7 +294,7 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             text_frame = notes_slide.notes_text_frame
             p = text_frame.add_paragraph()
             p.text = f"""
-                {finding["severity"].capitalize()}: finding["title"]
+                {finding["severity"].capitalize()}: {finding["title"]}
 
                 AFFECTED ENTITIES
                 {entities}
@@ -232,34 +312,54 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
                 {host_detection}
 
                 NETWORK DETECTION
-                ,
                 {net_detection}
 
                 REFERENCES
                 {references}
-            """.replace(
-                "                ", ""
-            )
+            """.replace("                ", "")
 
-        # Add Recommendations slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+    def create_recommendations_slide(self, config, base_context, jinja_context):
+        """Create recommendations slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Recommendations"
 
-        # Add Next Steps slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_TITLE_AND_CONTENT]
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Recommendations")
+
+    def create_next_steps_slide(self, config, base_context, jinja_context):
+        """Create next steps slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        title_shape = shapes.title
-        title_shape.text = "Next Steps"
 
-        # Add final slide
-        slide_layout = self.ppt_presentation.slide_layouts[SLD_LAYOUT_FINAL]
+        title_shape = self.get_title_shape(slide, shapes)
+        if title_shape:
+            set_text_preserving_format(title_shape, "Next Steps")
+
+    def create_final_slide(self, config, base_context, jinja_context):
+        """Create final/closing slide."""
+        if config.mode == "static":
+            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
+            return
+
+        slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
-        body_shape = shapes.placeholders[1]
+
+        body_shape = self.get_body_shape(slide, shapes)
+        if not body_shape:
+            return
+
         text_frame = get_textframe(body_shape)
         text_frame.clear()
         p = text_frame.paragraphs[0]
@@ -271,7 +371,3 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
         p = text_frame.add_paragraph()
         p.text = self.company_config.company_email
         p.line_spacing = 0.7
-
-        self.process_footers()
-
-        return super().run()

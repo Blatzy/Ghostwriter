@@ -187,6 +187,11 @@ urlpatterns += [
         name="template_download",
     ),
     path(
+        "templates/<int:pk>/slide-mapping/",
+        views.ReportTemplateSlideMappingUpdate.as_view(),
+        name="template_slide_mapping",
+    ),
+    path(
         "evidence/download/<int:pk>",
         views.EvidenceDownload.as_view(),
         name="evidence_download",

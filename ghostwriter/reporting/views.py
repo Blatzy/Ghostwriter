@@ -1006,3 +1006,135 @@ class LocalFindingNoteUpdate(RoleBasedAccessControlMixin, UpdateView):
     def get_success_url(self):
         messages.success(self.request, "Successfully updated the note.", extra_tags="alert-success")
         return reverse("reporting:local_edit", kwargs={"pk": self.get_object().finding.pk})
+
+
+class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
+    """
+    Update slide mapping configuration for a :model:`reporting.ReportTemplate`.
+
+    **Template**
+
+    :template:`reporting/report_template_slide_mapping_form.html`
+    """
+
+    model = ReportTemplate
+
+    def get(self, request, *args, **kwargs):
+        self.object = self.get_object()
+
+        # Only allow for PPTX templates
+        if self.object.doc_type.doc_type != "pptx":
+            messages.error(request, "Slide mapping is only available for PPTX templates")
+            return redirect(reverse("reporting:template_detail", kwargs={"pk": self.object.pk}))
+
+        # Import here to avoid circular imports
+        from ghostwriter.reporting.forms import ReportTemplateSlideMappingForm
+        from pptx import Presentation
+
+        # Extract layouts from PPTX
+        layouts = self.object.extract_pptx_layouts()
+
+        # Get current mapping or default
+        manager = self.object.get_slide_mapping_manager()
+        current_mapping = manager.to_dict()
+
+        # Validate current mapping
+        try:
+            warnings, errors = manager.validate()
+        except Exception as e:
+            logger.exception("Error validating slide mapping")
+            warnings = []
+            errors = [f"Error validating mapping: {str(e)}"]
+
+        # Build initial data for form
+        initial = {}
+        for slide_config in manager.slides:
+            initial[f"{slide_config.type}_layout"] = str(slide_config.layout_index)
+            initial[f"{slide_config.type}_mode"] = slide_config.mode
+            initial[f"{slide_config.type}_enabled"] = slide_config.enabled
+            initial[f"{slide_config.type}_position"] = slide_config.position
+
+        form = ReportTemplateSlideMappingForm(
+            initial=initial,
+            template_instance=self.object,
+        )
+
+        context = {
+            "reporttemplate": self.object,
+            "available_layouts": layouts,
+            "current_mapping": current_mapping,
+            "mapping_warnings": warnings,
+            "mapping_errors": errors,
+            "form": form,
+        }
+
+        return render(request, "reporting/report_template_slide_mapping_form.html", context)
+
+    def post(self, request, *args, **kwargs):
+        self.object = self.get_object()
+
+        # Import here to avoid circular imports
+        from ghostwriter.reporting.forms import ReportTemplateSlideMappingForm
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+        from pptx import Presentation
+
+        form = ReportTemplateSlideMappingForm(
+            request.POST,
+            template_instance=self.object,
+        )
+
+        if not form.is_valid():
+            # Re-render form with errors
+            layouts = self.object.extract_pptx_layouts()
+            manager = self.object.get_slide_mapping_manager()
+            current_mapping = manager.to_dict()
+            warnings, errors = manager.validate()
+
+            context = {
+                "reporttemplate": self.object,
+                "available_layouts": layouts,
+                "current_mapping": current_mapping,
+                "mapping_warnings": warnings,
+                "mapping_errors": errors,
+                "form": form,
+            }
+            return render(request, "reporting/report_template_slide_mapping_form.html", context)
+
+        # Get mapping JSON from form
+        mapping_data = form.get_mapping_json()
+
+        # Validate via SlideMappingManager
+        try:
+            prs = Presentation(self.object.document.path)
+            manager = SlideMappingManager(mapping_data, prs)
+            warnings, errors = manager.validate()
+
+            if errors:
+                for error in errors:
+                    messages.error(request, error)
+                # Re-render form
+                layouts = self.object.extract_pptx_layouts()
+                context = {
+                    "reporttemplate": self.object,
+                    "available_layouts": layouts,
+                    "current_mapping": mapping_data,
+                    "mapping_warnings": warnings,
+                    "mapping_errors": errors,
+                    "form": form,
+                }
+                return render(request, "reporting/report_template_slide_mapping_form.html", context)
+
+            for warning in warnings:
+                messages.warning(request, warning)
+
+            # Save
+            self.object.slide_mapping = mapping_data
+            self.object.save()
+            messages.success(request, "Slide mapping configuration saved successfully")
+
+        except Exception as e:
+            logger.exception("Error saving slide mapping")
+            messages.error(request, f"Error saving slide mapping: {str(e)}")
+            return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": self.object.pk}))
+
+        return redirect(reverse("reporting:template_detail", kwargs={"pk": self.object.pk}))

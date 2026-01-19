@@ -357,6 +357,12 @@ class ReportTemplate(models.Model):
         default=False,
         help_text="Set to true if this template is designed to include data from BloodHound",
     )
+    slide_mapping = models.JSONField(
+        "Slide Mapping Configuration",
+        null=True,
+        blank=True,
+        help_text="Configuration for slide types, layouts, and ordering in PPTX templates",
+    )
     tags = TaggableManager(blank=True)
     # Foreign Keys
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
@@ -514,10 +520,40 @@ class ReportTemplate(models.Model):
             # Ghostwriter Libraries
             from ghostwriter.modules.reportwriter.report.pptx import ExportReportPptx
 
-            return ExportReportPptx.lint(template_loc=self.document.path)
+            return ExportReportPptx.lint(template_loc=self.document.path, report_template=self)
         raise RuntimeError(
             f"Lint for doc_type {self.doc_type.doc_type} not implemented. Either this is a bug or an admin messed with the database."
         )
+
+    def get_slide_mapping_manager(self):
+        """
+        Get a SlideMappingManager instance for this template.
+
+        Returns:
+            SlideMappingManager instance configured with this template's mapping
+        """
+        from pptx import Presentation
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+
+        try:
+            prs = Presentation(self.document.path)
+            return SlideMappingManager(self.slide_mapping, prs)
+        except Exception:
+            logger.exception("Failed to load presentation for slide mapping manager")
+            return SlideMappingManager(self.slide_mapping, None)
+
+    def extract_pptx_layouts(self):
+        """
+        Extract available layouts from the PPTX template.
+
+        Returns:
+            List of dicts with layout info: [{'index': 0, 'name': 'Title Slide'}, ...]
+        """
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+
+        if self.doc_type.doc_type != "pptx":
+            return []
+        return SlideMappingManager.extract_layouts_from_pptx(self.document.path)
 
 
 class Report(models.Model):
