@@ -16,6 +16,7 @@ from ghostwriter.modules.reportwriter.base.pptx import (
     write_objective_list,
     create_static_slide,
     set_text_preserving_format,
+    render_jinja2_in_shape,
 )
 from ghostwriter.modules.reportwriter.project.base import ExportProjectBase
 
@@ -38,10 +39,34 @@ class ProjectSlidesMixin:
         title_shape = self.get_title_shape(slide, shapes)
         body_shape = self.get_body_shape(slide, shapes)
 
-        if title_shape:
+        # Check for Jinja2 templates in the Layout Title
+        use_title_template = False
+        if title_shape and title_shape.is_placeholder:
+            try:
+                 for ph in slide_layout.placeholders:
+                     if ph.placeholder_format.idx == title_shape.placeholder_format.idx:
+                         if ph.text and "{{" in ph.text:
+                             use_title_template = True
+                         break
+            except Exception:
+                pass
+
+        if title_shape and not use_title_template:
             set_text_preserving_format(title_shape, f'{self.data["client"]["name"]} {self.data["project"]["type"]}')
 
-        if body_shape:
+        # Check for Jinja2 templates in the Layout Body
+        use_body_template = False
+        if body_shape and body_shape.is_placeholder:
+            try:
+                 for ph in slide_layout.placeholders:
+                     if ph.placeholder_format.idx == body_shape.placeholder_format.idx:
+                         if ph.text and "{{" in ph.text:
+                             use_body_template = True
+                         break
+            except Exception:
+                pass
+
+        if body_shape and not use_body_template:
             text_frame = get_textframe(body_shape)
             # Preserve first paragraph formatting for main text
             if text_frame.paragraphs:
@@ -50,6 +75,15 @@ class ProjectSlidesMixin:
                 text_frame.text = "Technical Outbrief"
             p = text_frame.add_paragraph()
             p.text = dateformat(date.today(), settings.DATE_FORMAT)
+
+        # Prepare a specific context for the Title slide, ensuring 'title' is available
+        title_context = jinja_context.copy()
+        default_title = f'{self.data["client"]["name"]} {self.data["project"]["type"]}'
+        title_context["title"] = default_title
+        
+        # Render Jinja2 variables in all shapes
+        for shape in slide.shapes:
+            render_jinja2_in_shape(shape, self.jinja_env, title_context, slide)
 
     def create_agenda_slide(self, config, base_context, jinja_context):
         """Create the agenda slide."""

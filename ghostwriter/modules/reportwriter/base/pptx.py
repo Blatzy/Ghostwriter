@@ -496,67 +496,756 @@ def add_paragraph_preserving_format(text_frame, text, level=0):
     return p
 
 
-def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, context: dict):
+def copy_text_from_layout_preserving_format(dest_shape, source_ph):
     """
+    Copy text and formatting from a layout placeholder to a slide shape.
+    Preserves paragraphs, runs, and font properties.
+    """
+    if not source_ph.has_text_frame or not dest_shape.has_text_frame:
+        return
+
+    src_tf = source_ph.text_frame
+    dest_tf = dest_shape.text_frame
+    
+    # Clear existing text
+    dest_tf.clear()
+    
+    # If clear() leaves one empty paragraph (standard behavior), use it for the first one
+    # otherwise add new paragraphs
+    
+    for i, src_p in enumerate(src_tf.paragraphs):
+        if i == 0 and len(dest_tf.paragraphs) > 0:
+            dest_p = dest_tf.paragraphs[0]
+        else:
+            dest_p = dest_tf.add_paragraph()
+            
+        # Copy paragraph properties
+        dest_p.alignment = src_p.alignment
+        dest_p.level = src_p.level
+        
+        # Copy runs
+        for src_r in src_p.runs:
+            dest_r = dest_p.add_run()
+            dest_r.text = src_r.text
+            
+            # Copy font properties
+            src_font = src_r.font
+            dest_font = dest_r.font
+            
+            dest_font.name = src_font.name
+            dest_font.size = src_font.size
+            dest_font.bold = src_font.bold
+            dest_font.italic = src_font.italic
+            dest_font.underline = src_font.underline
+            
+            # Copy color if set
+            if src_font.color and src_font.color.type:
+                try:
+                    if src_font.color.type == 1: # RGB
+                        dest_font.color.rgb = src_font.color.rgb
+                    elif src_font.color.type == 2: # THEME
+                        dest_font.color.theme_color = src_font.color.theme_color
+                except AttributeError:
+                    pass
+
+
+def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, context: dict, slide, shape, evidences=None):
+
+
+    """
+
+
     Render Jinja2 templates in all paragraphs of a text frame.
 
+
+
+
+
     Args:
+
+
         text_frame: PPTX text frame object
+
+
         jinja_env: Jinja2 environment for rendering
+
+
         context: Template context dictionary
-    """
-    for paragraph in text_frame.paragraphs:
-        for run in paragraph.runs:
-            if run.text:
-                original_text = run.text
-                try:
-                    template = jinja_env.from_string(run.text)
-                    rendered = template.render(context)
-                    run.text = rendered
 
-                    # Log if variable wasn't replaced (still contains {{ }})
-                    if '{{' in rendered and '}}' in rendered:
-                        logger.warning(
-                            "Jinja2 variable may not have been replaced: '%s' -> '%s'. Available keys: %s",
-                            original_text[:100],
-                            rendered[:100],
-                            list(context.keys())
-                        )
-                except jinja2.exceptions.UndefinedError as e:
-                    logger.error(
-                        "Jinja2 undefined variable in '%s': %s. Available context keys: %s",
+
+        slide: The slide object, required for rich text processing
+
+
+        shape: The shape (or cell) object containing the text_frame
+
+
+        evidences: Dictionary of evidence files (optional)
+
+
+    """
+
+
+    if evidences is None:
+
+
+        evidences = {}
+
+
+
+
+
+    for p in text_frame.paragraphs:
+
+
+        # Reconstruct the full text of the paragraph from its runs
+
+
+        original_text = "".join(r.text for r in p.runs).replace('\xa0', ' ')
+
+
+        
+
+
+        if original_text and "{{" in original_text and "}}" in original_text:
+
+
+            try:
+
+
+                template = jinja_env.from_string(original_text)
+
+
+                rendered_text = template.render(context)
+
+
+
+
+
+                # Heuristic to check for leftover Jinja variables
+
+
+                if '{{' in rendered_text and '}}' in rendered_text:
+
+
+                    logger.warning(
+
+
+                        "Jinja2 variable may not have been replaced in '%s'. Available keys: %s",
+
+
                         original_text[:100],
-                        str(e),
+
+
                         list(context.keys())
+
+
                     )
-                    # Keep original text if rendering fails
-                except Exception as e:
-                    logger.warning("Failed to render Jinja2 in text run '%s': %s", original_text[:100], e)
 
 
-def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict):
+
+
+
+                # Simple check to see if rendered text is HTML
+
+
+                is_html = bool(BeautifulSoup(rendered_text, "html.parser").find())
+
+
+
+
+
+                # Preserve formatting of the first run
+
+
+                font_props = {}
+
+
+                if p.runs:
+
+
+                    font = p.runs[0].font
+
+
+                    font_props = {
+
+
+                        'name': font.name,
+
+
+                        'size': font.size,
+
+
+                        'bold': font.bold,
+
+
+                        'italic': font.italic,
+
+
+                        'underline': font.underline,
+
+
+                        'color': font.color if font.color.type else None
+
+
+                    }
+
+
+
+
+
+                # Clear all runs from the paragraph
+
+
+                for r in list(p.runs):
+
+
+                    p._p.remove(r._r)
+
+
+                
+
+
+                if is_html:
+
+
+                    # Use HtmlToPptx to render the HTML
+
+
+                    # Note: This will add new paragraphs, so we might need to delete the current one if it's empty
+
+
+                    HtmlToPptxWithEvidence.run(rendered_text, slide, shape, evidences=evidences)
+
+
+                    # If our current paragraph is now empty, we can try to remove it
+
+
+                    if not p.text.strip():
+
+
+                        delete_paragraph(p)
+
+
+                else:
+
+
+                    # Just set the text with preserved formatting
+
+
+                    new_run = p.add_run()
+
+
+                    new_run.text = rendered_text
+
+
+                    
+
+
+                    # Re-apply font properties
+
+
+                    if font_props:
+
+
+                        new_run.font.name = font_props.get('name')
+
+
+                        new_run.font.size = font_props.get('size')
+
+
+                        new_run.font.bold = font_props.get('bold')
+
+
+                        new_run.font.italic = font_props.get('italic')
+
+
+                        new_run.font.underline = font_props.get('underline')
+
+
+                        
+
+
+                        original_color = font_props.get('color')
+
+
+                        if original_color:
+
+
+                            try:
+
+
+                                if original_color.type == 1: # RGB
+
+
+                                    new_run.font.color.rgb = original_color.rgb
+
+
+                                elif original_color.type == 2: # THEME
+
+
+                                    new_run.font.color.theme_color = original_color.theme_color
+
+
+                            except AttributeError:
+
+
+                                pass
+
+
+
+
+
+            except jinja2.exceptions.UndefinedError as e:
+
+
+                logger.error(
+
+
+                    "Jinja2 undefined variable in '%s': %s. Available context keys: %s",
+
+
+                    original_text[:100], str(e), list(context.keys())
+
+
+                )
+
+
+            except Exception as e:
+
+
+                logger.warning(
+
+
+                    "Failed to render Jinja2 in paragraph '%s': %s",
+
+
+                    original_text[:100], e
+
+
+                )
+
+
+
+
+
+
+
+
+def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict, slide, evidences=None):
+
+
+
+
+
+
+
+
     """
+
+
+
+
+
+
+
+
     Recursively render Jinja2 templates in a shape and its children.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
     Args:
+
+
+
+
+
+
+
+
         shape: PPTX shape object
+
+
+
+
+
+
+
+
         jinja_env: Jinja2 environment for rendering
+
+
+
+
+
+
+
+
         context: Template context dictionary
+
+
+
+
+
+
+
+
+        slide: The slide object
+
+
+
+
+
+
+
+
+        evidences: Dictionary of evidence files (optional)
+
+
+
+
+
+
+
+
     """
+
+
+
+
+
+
+
+
     # Handle text frames
+
+
+
+
+
+
+
+
     if shape.has_text_frame:
-        render_jinja2_in_textframe(shape.text_frame, jinja_env, context)
+
+
+
+
+
+
+
+
+        # If the shape is a placeholder and empty, try to inherit text from the layout
+
+
+
+
+
+
+
+
+        # This handles cases where the user put "{{ variable }}" in the Master Slide/Layout
+
+
+
+
+
+
+
+
+        if shape.is_placeholder and not shape.text.strip():
+
+
+
+
+
+
+
+
+            try:
+
+
+
+
+
+
+
+
+                # Robustly find the layout placeholder by iterating
+
+
+
+
+
+
+
+
+                # Direct access (placeholders[idx]) can fail with IndexError for high indices
+
+
+
+
+
+
+
+
+                layout_ph = None
+
+
+
+
+
+
+
+
+                target_idx = shape.placeholder_format.idx
+
+
+
+
+
+
+
+
+                for ph in slide.slide_layout.placeholders:
+
+
+
+
+
+
+
+
+                    if ph.placeholder_format.idx == target_idx:
+
+
+
+
+
+
+
+
+                        layout_ph = ph
+
+
+
+
+
+
+
+
+                        break
+
+
+
+
+
+
+
+
+                
+
+
+
+
+
+
+
+
+                if layout_ph and layout_ph.has_text_frame and layout_ph.text and "{{" in layout_ph.text:
+
+
+
+
+
+
+
+
+                    # Copy the text and formatting from the layout to the slide shape
+
+
+
+
+
+
+
+
+                    copy_text_from_layout_preserving_format(shape, layout_ph)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+            except (KeyError, AttributeError, Exception):
+
+
+
+
+
+
+
+
+                # Ignore errors if layout placeholder mapping fails
+
+
+
+
+
+
+
+
+                pass
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+        render_jinja2_in_textframe(shape.text_frame, jinja_env, context, slide, shape, evidences=evidences)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # Handle tables
+
+
+
+
+
+
+
+
     if shape.has_table:
+
+
+
+
+
+
+
+
         for row in shape.table.rows:
+
+
+
+
+
+
+
+
             for cell in row.cells:
-                render_jinja2_in_textframe(cell.text_frame, jinja_env, context)
+
+
+
+
+
+
+
+
+                render_jinja2_in_textframe(cell.text_frame, jinja_env, context, slide, cell, evidences=evidences)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     # Handle grouped shapes
+
+
+
+
+
+
+
+
     if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
+
+
+
+
+
+
+
+
         for child_shape in shape.shapes:
-            render_jinja2_in_shape(child_shape, jinja_env, context)
+
+
+
+
+
+
+
+
+            render_jinja2_in_shape(child_shape, jinja_env, context, slide, evidences=evidences)
+
+
+
+
+
+
+
+
+
 
 
 def create_static_slide(presentation, layout_index: int, jinja_env: jinja2.Environment, context: dict):
@@ -577,6 +1266,6 @@ def create_static_slide(presentation, layout_index: int, jinja_env: jinja2.Envir
 
     # Render Jinja2 in all shapes
     for shape in slide.shapes:
-        render_jinja2_in_shape(shape, jinja_env, context)
+        render_jinja2_in_shape(shape, jinja_env, context, slide)
 
     return slide
