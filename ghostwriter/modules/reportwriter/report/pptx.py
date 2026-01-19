@@ -4,6 +4,7 @@ import io
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches
 import pptx
+from django.utils.safestring import mark_safe
 
 from ghostwriter.modules.reportwriter.base.pptx import (
     ExportBasePptx,
@@ -151,13 +152,13 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             # Create Jinja2 context for this specific observation
             observation_context = {
                 "title": observation.get("title", ""),
-                "description": prepare_for_pptx(observation.get("description", "")),
+                "description": mark_safe(observation.get("description", "")),
             }
 
             # Render Jinja2 variables in all shapes of the slide
             from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
             for shape in observation_slide.shapes:
-                render_jinja2_in_shape(shape, self.jinja_env, observation_context)
+                render_jinja2_in_shape(shape, self.jinja_env, observation_context, observation_slide, evidences=self.evidences_by_id)
 
             # Add evidence images
             for ev in observation.get("evidence", []):
@@ -259,16 +260,16 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             finding_context = {
                 "title": finding.get("title", ""),
                 "severity": finding.get("severity", ""),
-                "description": prepare_for_pptx(finding.get("description", "")),
-                "impact": prepare_for_pptx(finding.get("impact", "")),
-                "affected_entities": prepare_for_pptx(finding.get("affected_entities", "")),
-                "mitigation": prepare_for_pptx(finding.get("recommendation", "")),
-                "recommendation": prepare_for_pptx(finding.get("recommendation", "")),
-                "replication": prepare_for_pptx(finding.get("replication_steps", "")),
-                "replication_steps": prepare_for_pptx(finding.get("replication_steps", "")),
-                "host_detection": prepare_for_pptx(finding.get("host_detection_techniques", "")),
-                "network_detection": prepare_for_pptx(finding.get("network_detection_techniques", "")),
-                "references": prepare_for_pptx(finding.get("references", "")),
+                "description": mark_safe(finding.get("description", "")),
+                "impact": mark_safe(finding.get("impact", "")),
+                "affected_entities": mark_safe(finding.get("affected_entities", "")),
+                "mitigation": mark_safe(finding.get("recommendation", "")),
+                "recommendation": mark_safe(finding.get("recommendation", "")),
+                "replication": mark_safe(finding.get("replication_steps", "")),
+                "replication_steps": mark_safe(finding.get("replication_steps", "")),
+                "host_detection": mark_safe(finding.get("host_detection_techniques", "")),
+                "network_detection": mark_safe(finding.get("network_detection_techniques", "")),
+                "references": mark_safe(finding.get("references", "")),
                 "cvss_score": finding.get("cvss_score", ""),
                 "cvss_vector": finding.get("cvss_vector", ""),
             }
@@ -276,7 +277,7 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             # Render Jinja2 variables in all shapes of the slide
             from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
             for shape in finding_slide.shapes:
-                render_jinja2_in_shape(shape, self.jinja_env, finding_context)
+                render_jinja2_in_shape(shape, self.jinja_env, finding_context, finding_slide, evidences=self.evidences_by_id)
 
             # Add evidence images
             for ev in finding.get("evidence", []):
