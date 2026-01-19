@@ -1,4 +1,3 @@
-
 import io
 import logging
 import os
@@ -357,10 +356,10 @@ def add_slide_number(txtbox):
     # The slide number is actually a field, so we add a `fld` element to the paragraph
     # The number enclosed in the `a:t` element is the slide number and should auto-update on load/shuffle
     fld_xml = (
-        '<a:fld %s id="{1F4E2DE4-8ADA-4D4E-9951-90A1D26586E7}" type="slidenum">\n'
-        '  <a:rPr lang="en-US" smtClean="0"/>\n'
-        "  <a:t>2</a:t>\n"
-        "</a:fld>\n" % nsdecls("a")
+        '<a:fld %s id="{1F4E2DE4-8ADA-4D4E-9951-90A1D26586E7}" type="slidenum">'
+        '<a:rPr lang="en-US" smtClean="0"/>'
+        '<a:t>2</a:t>'
+        '</a:fld>' % nsdecls("a")
     )
     fld = parse_xml(fld_xml)
     par.append(fld)
@@ -413,7 +412,6 @@ def prepare_for_pptx(value):
         logger.exception("Failed parsing this value for PPTX: %s", value)
         return ""
 
-
 def delete_paragraph(par):
     """
     Delete the specified paragraph.
@@ -429,7 +427,6 @@ def delete_paragraph(par):
         parent_element.remove(p)
     else:
         logger.warning("Could not delete paragraph in because it had no parent element")
-
 
 def set_text_preserving_format(shape, text):
     """
@@ -477,7 +474,6 @@ def set_text_preserving_format(shape, text):
         # No paragraphs at all, set text directly
         text_frame.text = text
 
-
 def add_paragraph_preserving_format(text_frame, text, level=0):
     """
     Add a paragraph while trying to preserve formatting from the layout.
@@ -495,7 +491,6 @@ def add_paragraph_preserving_format(text_frame, text, level=0):
     p.level = level
     return p
 
-
 def copy_text_from_layout_preserving_format(dest_shape, source_ph):
     """
     Copy text and formatting from a layout placeholder to a slide shape.
@@ -509,9 +504,6 @@ def copy_text_from_layout_preserving_format(dest_shape, source_ph):
     
     # Clear existing text
     dest_tf.clear()
-    
-    # If clear() leaves one empty paragraph (standard behavior), use it for the first one
-    # otherwise add new paragraphs
     
     for i, src_p in enumerate(src_tf.paragraphs):
         if i == 0 and len(dest_tf.paragraphs) > 0:
@@ -548,704 +540,139 @@ def copy_text_from_layout_preserving_format(dest_shape, source_ph):
                 except AttributeError:
                     pass
 
-
 def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, context: dict, slide, shape, evidences=None):
-
-
     """
-
-
     Render Jinja2 templates in all paragraphs of a text frame.
 
-
-
-
-
     Args:
-
-
         text_frame: PPTX text frame object
-
-
         jinja_env: Jinja2 environment for rendering
-
-
         context: Template context dictionary
-
-
         slide: The slide object, required for rich text processing
-
-
         shape: The shape (or cell) object containing the text_frame
-
-
         evidences: Dictionary of evidence files (optional)
-
-
     """
-
-
     if evidences is None:
-
-
         evidences = {}
 
-
-
-
-
     for p in text_frame.paragraphs:
-
-
         # Reconstruct the full text of the paragraph from its runs
-
-
         original_text = "".join(r.text for r in p.runs).replace('\xa0', ' ')
-
-
         
-
-
         if original_text and "{{" in original_text and "}}" in original_text:
-
-
             try:
-
-
                 template = jinja_env.from_string(original_text)
-
-
                 rendered_text = template.render(context)
 
-
-
-
-
                 # Heuristic to check for leftover Jinja variables
-
-
                 if '{{' in rendered_text and '}}' in rendered_text:
-
-
                     logger.warning(
-
-
                         "Jinja2 variable may not have been replaced in '%s'. Available keys: %s",
-
-
                         original_text[:100],
-
-
                         list(context.keys())
-
-
                     )
 
-
-
-
-
                 # Simple check to see if rendered text is HTML
-
-
                 is_html = bool(BeautifulSoup(rendered_text, "html.parser").find())
 
-
-
-
-
                 # Preserve formatting of the first run
-
-
                 font_props = {}
-
-
                 if p.runs:
-
-
                     font = p.runs[0].font
-
-
                     font_props = {
-
-
                         'name': font.name,
-
-
                         'size': font.size,
-
-
                         'bold': font.bold,
-
-
                         'italic': font.italic,
-
-
                         'underline': font.underline,
-
-
                         'color': font.color if font.color.type else None
-
-
                     }
 
-
-
-
-
                 # Clear all runs from the paragraph
-
-
                 for r in list(p.runs):
-
-
                     p._p.remove(r._r)
-
-
                 
-
-
                 if is_html:
-
-
                     # Use HtmlToPptx to render the HTML
-
-
-                    # Note: This will add new paragraphs, so we might need to delete the current one if it's empty
-
-
                     HtmlToPptxWithEvidence.run(rendered_text, slide, shape, evidences=evidences)
-
-
                     # If our current paragraph is now empty, we can try to remove it
-
-
                     if not p.text.strip():
-
-
                         delete_paragraph(p)
-
-
                 else:
-
-
                     # Just set the text with preserved formatting
-
-
                     new_run = p.add_run()
-
-
                     new_run.text = rendered_text
-
-
                     
-
-
                     # Re-apply font properties
-
-
                     if font_props:
-
-
                         new_run.font.name = font_props.get('name')
-
-
                         new_run.font.size = font_props.get('size')
-
-
                         new_run.font.bold = font_props.get('bold')
-
-
                         new_run.font.italic = font_props.get('italic')
-
-
                         new_run.font.underline = font_props.get('underline')
-
-
                         
-
-
                         original_color = font_props.get('color')
-
-
                         if original_color:
-
-
                             try:
-
-
                                 if original_color.type == 1: # RGB
-
-
                                     new_run.font.color.rgb = original_color.rgb
-
-
                                 elif original_color.type == 2: # THEME
-
-
                                     new_run.font.color.theme_color = original_color.theme_color
-
-
                             except AttributeError:
-
-
                                 pass
 
-
-
-
-
             except jinja2.exceptions.UndefinedError as e:
-
-
                 logger.error(
-
-
                     "Jinja2 undefined variable in '%s': %s. Available context keys: %s",
-
-
                     original_text[:100], str(e), list(context.keys())
-
-
                 )
-
-
             except Exception as e:
-
-
                 logger.warning(
-
-
                     "Failed to render Jinja2 in paragraph '%s': %s",
-
-
                     original_text[:100], e
-
-
                 )
-
-
-
-
-
-
-
 
 def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict, slide, evidences=None):
-
-
-
-
-
-
-
-
     """
-
-
-
-
-
-
-
-
     Recursively render Jinja2 templates in a shape and its children.
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     Args:
-
-
-
-
-
-
-
-
         shape: PPTX shape object
-
-
-
-
-
-
-
-
         jinja_env: Jinja2 environment for rendering
-
-
-
-
-
-
-
-
         context: Template context dictionary
-
-
-
-
-
-
-
-
         slide: The slide object
-
-
-
-
-
-
-
-
         evidences: Dictionary of evidence files (optional)
-
-
-
-
-
-
-
-
     """
-
-
-
-
-
-
-
-
     # Handle text frames
-
-
-
-
-
-
-
-
     if shape.has_text_frame:
-
-
-
-
-
-
-
-
         # If the shape is a placeholder and empty, try to inherit text from the layout
-
-
-
-
-
-
-
-
-        # This handles cases where the user put "{{ variable }}" in the Master Slide/Layout
-
-
-
-
-
-
-
-
         if shape.is_placeholder and not shape.text.strip():
-
-
-
-
-
-
-
-
             try:
-
-
-
-
-
-
-
-
-                # Robustly find the layout placeholder by iterating
-
-
-
-
-
-
-
-
-                # Direct access (placeholders[idx]) can fail with IndexError for high indices
-
-
-
-
-
-
-
-
                 layout_ph = None
-
-
-
-
-
-
-
-
                 target_idx = shape.placeholder_format.idx
-
-
-
-
-
-
-
-
                 for ph in slide.slide_layout.placeholders:
-
-
-
-
-
-
-
-
                     if ph.placeholder_format.idx == target_idx:
-
-
-
-
-
-
-
-
                         layout_ph = ph
-
-
-
-
-
-
-
-
                         break
-
-
-
-
-
-
-
-
                 
-
-
-
-
-
-
-
-
                 if layout_ph and layout_ph.has_text_frame and layout_ph.text and "{{" in layout_ph.text:
-
-
-
-
-
-
-
-
-                    # Copy the text and formatting from the layout to the slide shape
-
-
-
-
-
-
-
-
                     copy_text_from_layout_preserving_format(shape, layout_ph)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
             except (KeyError, AttributeError, Exception):
-
-
-
-
-
-
-
-
-                # Ignore errors if layout placeholder mapping fails
-
-
-
-
-
-
-
-
                 pass
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
         render_jinja2_in_textframe(shape.text_frame, jinja_env, context, slide, shape, evidences=evidences)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # Handle tables
-
-
-
-
-
-
-
-
     if shape.has_table:
-
-
-
-
-
-
-
-
         for row in shape.table.rows:
-
-
-
-
-
-
-
-
             for cell in row.cells:
-
-
-
-
-
-
-
-
                 render_jinja2_in_textframe(cell.text_frame, jinja_env, context, slide, cell, evidences=evidences)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
     # Handle grouped shapes
-
-
-
-
-
-
-
-
     if shape.shape_type == 6:  # MSO_SHAPE_TYPE.GROUP
-
-
-
-
-
-
-
-
         for child_shape in shape.shapes:
-
-
-
-
-
-
-
-
             render_jinja2_in_shape(child_shape, jinja_env, context, slide, evidences=evidences)
-
-
-
-
-
-
-
-
-
 
 
 def create_static_slide(presentation, layout_index: int, jinja_env: jinja2.Environment, context: dict):
