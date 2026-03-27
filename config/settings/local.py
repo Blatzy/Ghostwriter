@@ -46,8 +46,11 @@ EMAIL_PORT = 1025
 INTERNAL_IPS = ["127.0.0.1", "10.0.2.2"]
 if env("USE_DOCKER") == "yes":
     import socket
-    _, _, ips = socket.gethostbyname_ex("nginx")
-    INTERNAL_IPS += ips
+    try:
+        _, _, ips = socket.gethostbyname_ex("nginx")
+        INTERNAL_IPS += ips
+    except socket.gaierror:
+        pass
 
 # django-extensions
 # ------------------------------------------------------------------------------
