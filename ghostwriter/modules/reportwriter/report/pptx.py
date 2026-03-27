@@ -27,47 +27,23 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
         base_context = self.map_rich_texts()
         jinja_context = self.get_slide_context()
 
-        # Get enabled slides sorted by position
+        # Get slides sorted by position
         slides_config = self.slide_mapping_manager.get_slides_by_position()
 
-        # Process each slide type according to configuration
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+
         for slide_config in slides_config:
-            if not slide_config.enabled:
-                continue
-
-            slide_type = slide_config.type
-
-            # Route to appropriate creation method
-            if slide_type == "title":
-                self.create_title_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "agenda":
-                self.create_agenda_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "introduction":
-                self.create_introduction_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "assessment_details":
-                self.create_assessment_details_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "methodology":
-                self.create_methodology_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "timeline":
-                self.create_timeline_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "attack_path":
-                self.create_attack_path_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "observations_overview":
-                self.create_observations_overview_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "observation":
-                self.create_observation_slides(slide_config, base_context, jinja_context)
-            elif slide_type == "findings_overview":
-                self.create_findings_overview_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "finding":
-                self.create_finding_slides(slide_config, base_context, jinja_context)
-            elif slide_type == "recommendations":
-                self.create_recommendations_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "next_steps":
-                self.create_next_steps_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "final":
-                self.create_final_slide(slide_config, base_context, jinja_context)
-            elif slide_config.mode == "static":
-                # Handle custom static slides
+            if slide_config.category == "builtin":
+                type_info = SlideMappingManager.BUILTIN_TYPES.get(slide_config.type)
+                if type_info:
+                    handler = getattr(self, type_info["handler"], None)
+                    if handler:
+                        handler(slide_config, base_context, jinja_context)
+                    else:
+                        logger.warning("No handler method '%s' for built-in type '%s'", type_info["handler"], slide_config.type)
+                else:
+                    logger.warning("Unknown built-in slide type: %s", slide_config.type)
+            elif slide_config.category == "custom":
                 create_static_slide(
                     self.ppt_presentation,
                     slide_config.layout_index,
@@ -80,10 +56,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
     def create_observations_overview_slide(self, config, base_context, jinja_context):
         """Create the observations overview slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -141,10 +113,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
         Simply add these variables to your PowerPoint layout text and they will be replaced.
         """
-        if config.mode == "static":
-            # Static mode doesn't make sense for dynamic content, skip
-            return
-
         for observation in base_context["observations"]:
             slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
             observation_slide = self.ppt_presentation.slides.add_slide(slide_layout)
@@ -154,6 +122,13 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
                 "title": observation.get("title", ""),
                 "description": mark_safe(observation.get("description", "")),
             }
+
+            # Set the title placeholder directly (idx=0) since add_slide()
+            # creates empty placeholders that don't inherit layout text
+            for shape in observation_slide.placeholders:
+                if shape.placeholder_format.idx == 0 and shape.has_text_frame:
+                    shape.text_frame.text = observation.get("title", "")
+                    break
 
             # Render Jinja2 variables in all shapes of the slide
             from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
@@ -166,10 +141,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
     def create_findings_overview_slide(self, config, base_context, jinja_context):
         """Create the findings overview slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -248,10 +219,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
         Simply add these variables to your PowerPoint layout text and they will be replaced.
         """
-        if config.mode == "static":
-            # Static mode doesn't make sense for dynamic content, skip
-            return
-
         for finding in base_context["findings"]:
             slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
             finding_slide = self.ppt_presentation.slides.add_slide(slide_layout)
@@ -273,6 +240,13 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
                 "cvss_score": finding.get("cvss_score", ""),
                 "cvss_vector": finding.get("cvss_vector", ""),
             }
+
+            # Set the title placeholder directly (idx=0) since add_slide()
+            # creates empty placeholders that don't inherit layout text
+            for shape in finding_slide.placeholders:
+                if shape.placeholder_format.idx == 0 and shape.has_text_frame:
+                    shape.text_frame.text = finding.get("title", "")
+                    break
 
             # Render Jinja2 variables in all shapes of the slide
             from ghostwriter.modules.reportwriter.base.pptx import render_jinja2_in_shape
@@ -321,10 +295,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
     def create_recommendations_slide(self, config, base_context, jinja_context):
         """Create recommendations slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -335,10 +305,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
     def create_next_steps_slide(self, config, base_context, jinja_context):
         """Create next steps slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -349,10 +315,6 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
 
     def create_final_slide(self, config, base_context, jinja_context):
         """Create final/closing slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes

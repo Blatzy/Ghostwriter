@@ -197,6 +197,16 @@ urlpatterns += [
         name="template_slide_mapping",
     ),
     path(
+        "templates/<int:pk>/slide-mapping/export/",
+        views.ReportTemplateSlideMappingExport.as_view(),
+        name="template_slide_mapping_export",
+    ),
+    path(
+        "templates/<int:pk>/slide-mapping/import/",
+        views.ReportTemplateSlideMappingImport.as_view(),
+        name="template_slide_mapping_import",
+    ),
+    path(
         "evidence/download/<int:pk>",
         views.EvidenceDownload.as_view(),
         name="evidence_download",

@@ -813,121 +813,65 @@ class ReportObservationLinkUpdateForm(forms.ModelForm):
 
 
 class ReportTemplateSlideMappingForm(forms.Form):
-    """Form for configuring slide mapping of a PPTX template"""
+    """Form for configuring slide mapping of a PPTX template.
+
+    The entire slide mapping is managed as a single JSON field.
+    The JavaScript UI builds the table and serializes to this field on submit.
+    """
+
+    slides_json = forms.CharField(
+        widget=forms.HiddenInput(),
+        required=True,
+    )
 
     def __init__(self, *args, template_instance=None, **kwargs):
         super().__init__(*args, **kwargs)
-
         self.template_instance = template_instance
         self.available_layouts = []
-
         if template_instance:
             self.available_layouts = template_instance.extract_pptx_layouts()
 
-        # Build layout choices
-        layout_choices = [(str(layout["index"]), f"{layout['index']}: {layout['name']}") for layout in self.available_layouts]
+    def clean_slides_json(self):
+        import json
+        raw = self.cleaned_data["slides_json"]
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise forms.ValidationError(f"Invalid JSON: {e}")
 
-        if not layout_choices:
-            layout_choices = [(str(i), f"Layout {i}") for i in range(20)]  # Fallback to generic layouts
+        if not isinstance(data, list):
+            raise forms.ValidationError("Slides data must be a JSON array")
 
-        # Import slide types from SlideMappingManager
         from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
 
-        # Create fields for each slide type
-        for slide_key, slide_name in SlideMappingManager.SLIDE_TYPES.items():
-            # Layout choice field
-            self.fields[f"{slide_key}_layout"] = forms.ChoiceField(
-                label=f"{slide_name} - Layout",
-                choices=layout_choices,
-                required=False,
-            )
+        seen_builtin_types = set()
+        for i, slide in enumerate(data):
+            if not isinstance(slide, dict):
+                raise forms.ValidationError(f"Slide {i + 1}: must be a dictionary")
 
-            # Mode field
-            self.fields[f"{slide_key}_mode"] = forms.ChoiceField(
-                label=f"{slide_name} - Mode",
-                choices=[("dynamic", "Dynamic"), ("static", "Static")],
-                initial="dynamic",
-                required=False,
-            )
+            category = slide.get("category")
+            if category not in ("builtin", "custom"):
+                raise forms.ValidationError(f"Slide {i + 1}: invalid category '{category}'")
 
-            # Enabled field
-            self.fields[f"{slide_key}_enabled"] = forms.BooleanField(
-                label=f"{slide_name} - Enabled",
-                initial=True,
-                required=False,
-            )
+            if category == "builtin":
+                stype = slide.get("type")
+                if stype not in SlideMappingManager.BUILTIN_TYPES:
+                    raise forms.ValidationError(f"Slide {i + 1}: unknown built-in type '{stype}'")
+                if stype in seen_builtin_types:
+                    raise forms.ValidationError(f"Slide {i + 1}: duplicate built-in type '{stype}'")
+                seen_builtin_types.add(stype)
 
-            # Position field
-            self.fields[f"{slide_key}_position"] = forms.IntegerField(
-                label=f"{slide_name} - Position",
-                min_value=1,
-                required=False,
-            )
+            if "layout_index" not in slide:
+                raise forms.ValidationError(f"Slide {i + 1}: missing layout_index")
 
-        # Field for custom slides (JSON)
-        self.fields["custom_slides"] = forms.CharField(
-            widget=forms.Textarea(attrs={"rows": 5}),
-            required=False,
-            help_text="JSON array for custom static slides (advanced). Example: [{\"type\":\"custom_team\",\"layout_index\":6,\"mode\":\"static\",\"enabled\":true,\"position\":2}]",
-        )
+            if not slide.get("label", "").strip():
+                raise forms.ValidationError(f"Slide {i + 1}: label is required")
 
-    def clean(self):
-        cleaned_data = super().clean()
-
-        # Validate positions are unique (only for enabled slides)
-        positions = []
-        for slide_key in self.get_slide_types():
-            if cleaned_data.get(f"{slide_key}_enabled"):
-                pos = cleaned_data.get(f"{slide_key}_position")
-                if pos:
-                    if pos in positions:
-                        self.add_error(f"{slide_key}_position", "Position must be unique")
-                    positions.append(pos)
-
-        # Validate custom slides JSON if provided
-        custom_slides_json = cleaned_data.get("custom_slides", "").strip()
-        if custom_slides_json:
-            try:
-                import json
-                custom_slides = json.loads(custom_slides_json)
-                if not isinstance(custom_slides, list):
-                    self.add_error("custom_slides", "Custom slides must be a JSON array")
-            except json.JSONDecodeError as e:
-                self.add_error("custom_slides", f"Invalid JSON: {e}")
-
-        return cleaned_data
-
-    def get_slide_types(self):
-        """Get list of slide type keys"""
-        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
-        return list(SlideMappingManager.SLIDE_TYPES.keys())
+        return data
 
     def get_mapping_json(self):
-        """Convert form data to slide mapping JSON"""
-        import json
-
-        slides = []
-
-        # Add all predefined slide types
-        for slide_key in self.get_slide_types():
-            if self.cleaned_data.get(f"{slide_key}_position") is not None:
-                slide = {
-                    "type": slide_key,
-                    "layout_index": int(self.cleaned_data.get(f"{slide_key}_layout", 1)),
-                    "mode": self.cleaned_data.get(f"{slide_key}_mode", "dynamic"),
-                    "enabled": self.cleaned_data.get(f"{slide_key}_enabled", True),
-                    "position": self.cleaned_data.get(f"{slide_key}_position", 1),
-                }
-                slides.append(slide)
-
-        # Add custom slides if provided
-        custom_slides_json = self.cleaned_data.get("custom_slides", "").strip()
-        if custom_slides_json:
-            try:
-                custom_slides = json.loads(custom_slides_json)
-                if isinstance(custom_slides, list):
-                    slides.extend(custom_slides)
-            except json.JSONDecodeError:
-                pass  # Already validated in clean()
-
-        return {"version": 1, "slides": slides}
+        """Convert form data to v2 slide mapping JSON."""
+        slides = self.cleaned_data["slides_json"]
+        for i, slide in enumerate(slides):
+            slide["position"] = i + 1
+        return {"version": 2, "slides": slides}

@@ -1042,23 +1042,16 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
     def get(self, request, *args, **kwargs):
         self.object = self.get_object()
 
-        # Only allow for PPTX templates
         if self.object.doc_type.doc_type != "pptx":
             messages.error(request, "Slide mapping is only available for PPTX templates")
             return redirect(reverse("reporting:template_detail", kwargs={"pk": self.object.pk}))
 
-        # Import here to avoid circular imports
         from ghostwriter.reporting.forms import ReportTemplateSlideMappingForm
-        from pptx import Presentation
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
 
-        # Extract layouts from PPTX
         layouts = self.object.extract_pptx_layouts()
-
-        # Get current mapping or default
         manager = self.object.get_slide_mapping_manager()
-        current_mapping = manager.to_dict()
 
-        # Validate current mapping
         try:
             warnings, errors = manager.validate()
         except Exception as e:
@@ -1066,26 +1059,25 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
             warnings = []
             errors = [f"Error validating mapping: {str(e)}"]
 
-        # Build initial data for form
-        initial = {}
-        for slide_config in manager.slides:
-            initial[f"{slide_config.type}_layout"] = str(slide_config.layout_index)
-            initial[f"{slide_config.type}_mode"] = slide_config.mode
-            initial[f"{slide_config.type}_enabled"] = slide_config.enabled
-            initial[f"{slide_config.type}_position"] = slide_config.position
+        import json
+        slides_json = json.dumps([s.to_dict() for s in manager.get_slides_by_position()])
 
         form = ReportTemplateSlideMappingForm(
-            initial=initial,
+            initial={"slides_json": slides_json},
             template_instance=self.object,
         )
+
+        builtin_types_json = json.dumps(SlideMappingManager.BUILTIN_TYPES)
+        available_layouts_json = json.dumps(layouts)
 
         context = {
             "reporttemplate": self.object,
             "available_layouts": layouts,
-            "current_mapping": current_mapping,
+            "available_layouts_json": available_layouts_json,
             "mapping_warnings": warnings,
             "mapping_errors": errors,
             "form": form,
+            "builtin_types_json": builtin_types_json,
         }
 
         return render(request, "reporting/report_template_slide_mapping_form.html", context)
@@ -1093,7 +1085,6 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
     def post(self, request, *args, **kwargs):
         self.object = self.get_object()
 
-        # Import here to avoid circular imports
         from ghostwriter.reporting.forms import ReportTemplateSlideMappingForm
         from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
         from pptx import Presentation
@@ -1104,26 +1095,23 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
         )
 
         if not form.is_valid():
-            # Re-render form with errors
+            import json
             layouts = self.object.extract_pptx_layouts()
-            manager = self.object.get_slide_mapping_manager()
-            current_mapping = manager.to_dict()
-            warnings, errors = manager.validate()
-
+            builtin_types_json = json.dumps(SlideMappingManager.BUILTIN_TYPES)
+            available_layouts_json = json.dumps(layouts)
             context = {
                 "reporttemplate": self.object,
                 "available_layouts": layouts,
-                "current_mapping": current_mapping,
-                "mapping_warnings": warnings,
-                "mapping_errors": errors,
+                "available_layouts_json": available_layouts_json,
+                "mapping_warnings": [],
+                "mapping_errors": [e for errors in form.errors.values() for e in errors],
                 "form": form,
+                "builtin_types_json": builtin_types_json,
             }
             return render(request, "reporting/report_template_slide_mapping_form.html", context)
 
-        # Get mapping JSON from form
         mapping_data = form.get_mapping_json()
 
-        # Validate via SlideMappingManager
         try:
             prs = Presentation(self.object.document.path)
             manager = SlideMappingManager(mapping_data, prs)
@@ -1132,22 +1120,11 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
             if errors:
                 for error in errors:
                     messages.error(request, error)
-                # Re-render form
-                layouts = self.object.extract_pptx_layouts()
-                context = {
-                    "reporttemplate": self.object,
-                    "available_layouts": layouts,
-                    "current_mapping": mapping_data,
-                    "mapping_warnings": warnings,
-                    "mapping_errors": errors,
-                    "form": form,
-                }
-                return render(request, "reporting/report_template_slide_mapping_form.html", context)
+                return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": self.object.pk}))
 
             for warning in warnings:
                 messages.warning(request, warning)
 
-            # Save
             self.object.slide_mapping = mapping_data
             self.object.save()
             messages.success(request, "Slide mapping configuration saved successfully")
@@ -1157,4 +1134,78 @@ class ReportTemplateSlideMappingUpdate(RoleBasedAccessControlMixin, UpdateView):
             messages.error(request, f"Error saving slide mapping: {str(e)}")
             return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": self.object.pk}))
 
-        return redirect(reverse("reporting:template_detail", kwargs={"pk": self.object.pk}))
+        return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": self.object.pk}))
+
+
+class ReportTemplateSlideMappingExport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Export the slide mapping configuration as a JSON file."""
+
+    model = ReportTemplate
+
+    def get(self, request, *args, **kwargs):
+        obj = self.get_object()
+        if obj.doc_type.doc_type != "pptx":
+            return JsonResponse({"error": "Slide mapping is only available for PPTX templates"}, status=400)
+
+        manager = obj.get_slide_mapping_manager()
+        mapping = manager.to_dict()
+
+        response = JsonResponse(mapping, json_dumps_params={"indent": 2})
+        filename = f"slide_mapping_{obj.pk}_{obj.name.replace(' ', '_')}.json"
+        response["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+
+
+class ReportTemplateSlideMappingImport(RoleBasedAccessControlMixin, SingleObjectMixin, View):
+    """Import a slide mapping configuration from a JSON file."""
+
+    model = ReportTemplate
+
+    def post(self, request, *args, **kwargs):
+        import json
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+        from pptx import Presentation
+
+        obj = self.get_object()
+
+        if obj.doc_type.doc_type != "pptx":
+            messages.error(request, "Slide mapping is only available for PPTX templates")
+            return redirect(reverse("reporting:template_detail", kwargs={"pk": obj.pk}))
+
+        uploaded_file = request.FILES.get("mapping_file")
+        if not uploaded_file:
+            messages.error(request, "No file uploaded")
+            return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": obj.pk}))
+
+        try:
+            data = json.load(uploaded_file)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            messages.error(request, f"Invalid JSON file: {e}")
+            return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": obj.pk}))
+
+        if not isinstance(data, dict) or "slides" not in data:
+            messages.error(request, "Invalid mapping format: missing 'slides' key")
+            return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": obj.pk}))
+
+        try:
+            prs = Presentation(obj.document.path)
+            manager = SlideMappingManager(data, prs)
+            warnings, errors = manager.validate()
+
+            if errors:
+                for error in errors:
+                    messages.error(request, f"Import error: {error}")
+                return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": obj.pk}))
+
+            obj.slide_mapping = manager.to_dict()
+            obj.save()
+            messages.success(request, "Slide mapping imported successfully")
+
+            for w in warnings:
+                messages.warning(request, w)
+
+        except Exception as e:
+            logger.exception("Error importing slide mapping")
+            messages.error(request, f"Import failed: {e}")
+
+        return redirect(reverse("reporting:template_slide_mapping", kwargs={"pk": obj.pk}))

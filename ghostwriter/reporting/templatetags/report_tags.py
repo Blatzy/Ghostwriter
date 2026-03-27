@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 
 
 @register.filter
+def get_field(form, field_name):
+    """Return a form field by name for dynamic template rendering."""
+    try:
+        return form[field_name]
+    except KeyError:
+        return ""
+
+
+@register.filter
 def get_item(dictionary, key):
     """
     Return a key value from a dictionary object.

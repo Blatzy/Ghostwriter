@@ -1,6 +1,7 @@
 """Slide mapping manager for flexible PPTX template configuration."""
 
 import logging
+from uuid import uuid4
 from typing import Dict, List, Optional, Tuple
 
 from pptx import Presentation
@@ -9,29 +10,32 @@ logger = logging.getLogger(__name__)
 
 
 class SlideConfig:
-    """Represents configuration for a single slide type."""
+    """Represents configuration for a single slide in the mapping."""
 
     def __init__(
         self,
+        id: str,
         type: str,
+        category: str,
+        label: str,
         layout_index: int,
-        mode: str,
-        enabled: bool,
         position: int,
     ):
+        self.id = id
         self.type = type
+        self.category = category  # 'builtin' or 'custom'
+        self.label = label
         self.layout_index = layout_index
-        self.mode = mode  # 'static' or 'dynamic'
-        self.enabled = enabled
         self.position = position
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         return {
+            "id": self.id,
             "type": self.type,
+            "category": self.category,
+            "label": self.label,
             "layout_index": self.layout_index,
-            "mode": self.mode,
-            "enabled": self.enabled,
             "position": self.position,
         }
 
@@ -39,10 +43,11 @@ class SlideConfig:
     def from_dict(cls, data: dict) -> "SlideConfig":
         """Create from dictionary."""
         return cls(
+            id=data["id"],
             type=data["type"],
+            category=data["category"],
+            label=data.get("label", ""),
             layout_index=data["layout_index"],
-            mode=data["mode"],
-            enabled=data.get("enabled", True),
             position=data["position"],
         )
 
@@ -50,44 +55,38 @@ class SlideConfig:
 class SlideMappingManager:
     """Manages slide mapping configuration for PPTX templates."""
 
-    # Slide type definitions
-    SLIDE_TYPES = {
+    # Built-in slide types with their default labels and handler method names.
+    # Each built-in type has a corresponding create_* method in the exporter.
+    BUILTIN_TYPES = {
         # Project slides
-        "title": "Title Slide",
-        "agenda": "Agenda",
-        "introduction": "Team Introduction",
-        "assessment_details": "Assessment Details",
-        "methodology": "Methodology",
-        "timeline": "Assessment Timeline",
-        "attack_path": "Attack Path Overview",
+        "title": {"default_label": "Title Slide", "handler": "create_title_slide"},
+        "agenda": {"default_label": "Agenda", "handler": "create_agenda_slide"},
+        "introduction": {"default_label": "Team Introduction", "handler": "create_introduction_slide"},
+        "assessment_details": {"default_label": "Assessment Details", "handler": "create_assessment_details_slide"},
+        "methodology": {"default_label": "Methodology", "handler": "create_methodology_slide"},
+        "timeline": {"default_label": "Assessment Timeline", "handler": "create_timeline_slide"},
+        "attack_path": {"default_label": "Attack Path Overview", "handler": "create_attack_path_slide"},
         # Report slides
-        "observations_overview": "Positive Observations Overview",
-        "observation": "Individual Observation Slide",
-        "findings_overview": "Findings Overview",
-        "finding": "Individual Finding Slide",
-        "recommendations": "Recommendations",
-        "next_steps": "Next Steps",
-        "final": "Final/Closing Slide",
+        "observations_overview": {"default_label": "Positive Observations Overview", "handler": "create_observations_overview_slide"},
+        "observation": {"default_label": "Individual Observation Slide", "handler": "create_observation_slides"},
+        "findings_overview": {"default_label": "Findings Overview", "handler": "create_findings_overview_slide"},
+        "finding": {"default_label": "Individual Finding Slide", "handler": "create_finding_slides"},
+        "recommendations": {"default_label": "Recommendations", "handler": "create_recommendations_slide"},
+        "next_steps": {"default_label": "Next Steps", "handler": "create_next_steps_slide"},
+        "final": {"default_label": "Final/Closing Slide", "handler": "create_final_slide"},
     }
 
-    # Default mapping for backwards compatibility
+    # Kept for backwards compatibility with code that references SLIDE_TYPES
+    SLIDE_TYPES = {k: v["default_label"] for k, v in BUILTIN_TYPES.items()}
+
+    # Default mapping (v2 format) for new templates
     DEFAULT_MAPPING = {
-        "version": 1,
+        "version": 2,
         "slides": [
-            {"type": "title", "layout_index": 0, "mode": "dynamic", "enabled": True, "position": 1},
-            {"type": "agenda", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 2},
-            {"type": "introduction", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 3},
-            {"type": "assessment_details", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 4},
-            {"type": "methodology", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 5},
-            {"type": "timeline", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 6},
-            {"type": "attack_path", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 7},
-            {"type": "observations_overview", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 8},
-            {"type": "observation", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 9},
-            {"type": "findings_overview", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 10},
-            {"type": "finding", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 11},
-            {"type": "recommendations", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 12},
-            {"type": "next_steps", "layout_index": 1, "mode": "dynamic", "enabled": True, "position": 13},
-            {"type": "final", "layout_index": 12, "mode": "dynamic", "enabled": True, "position": 14},
+            {"id": "title", "type": "title", "category": "builtin", "label": "Title Slide", "layout_index": 0, "position": 1},
+            {"id": "findings_overview", "type": "findings_overview", "category": "builtin", "label": "Findings Overview", "layout_index": 1, "position": 2},
+            {"id": "finding", "type": "finding", "category": "builtin", "label": "Individual Finding Slide", "layout_index": 1, "position": 3},
+            {"id": "final", "type": "final", "category": "builtin", "label": "Final/Closing Slide", "layout_index": 1, "position": 4},
         ],
     }
 
@@ -105,12 +104,15 @@ class SlideMappingManager:
         """
         self.presentation = presentation
 
-        # Validate and sanitize mapping_data
         if mapping_data is None or not isinstance(mapping_data, dict):
             logger.warning("Invalid or missing slide mapping data, using defaults")
             self.mapping_data = self.DEFAULT_MAPPING.copy()
         else:
-            self.mapping_data = mapping_data
+            # Migrate v1 to v2 if needed
+            if mapping_data.get("version", 1) < 2:
+                self.mapping_data = self._migrate_v1_to_v2(mapping_data)
+            else:
+                self.mapping_data = mapping_data
 
         try:
             self.slides = self._parse_slides()
@@ -118,6 +120,29 @@ class SlideMappingManager:
             logger.exception("Failed to parse slide mapping, using defaults: %s", e)
             self.mapping_data = self.DEFAULT_MAPPING.copy()
             self.slides = self._parse_slides()
+
+    def _migrate_v1_to_v2(self, data: dict) -> dict:
+        """Convert v1 mapping format to v2."""
+        new_slides = []
+        for slide in data.get("slides", []):
+            if not slide.get("enabled", True):
+                continue  # Disabled v1 slides are dropped in v2
+
+            stype = slide.get("type", "")
+            is_builtin = stype in self.BUILTIN_TYPES
+
+            new_slide = {
+                "id": stype if is_builtin else f"custom_{uuid4().hex[:8]}",
+                "type": stype if is_builtin else "custom",
+                "category": "builtin" if is_builtin else "custom",
+                "label": slide.get("label", "") or self.BUILTIN_TYPES.get(stype, {}).get("default_label", stype),
+                "layout_index": slide.get("layout_index", 1),
+                "position": slide.get("position", 1),
+            }
+            new_slides.append(new_slide)
+
+        logger.info("Migrated slide mapping from v1 to v2: %d slides", len(new_slides))
+        return {"version": 2, "slides": new_slides}
 
     def _parse_slides(self) -> List[SlideConfig]:
         """Parse slides from mapping data."""
@@ -132,38 +157,25 @@ class SlideMappingManager:
         return slides
 
     def get_slide_config(self, slide_type: str) -> Optional[SlideConfig]:
-        """Get configuration for a specific slide type."""
+        """Get configuration for a specific built-in slide type."""
         for slide in self.slides:
-            if slide.type == slide_type:
+            if slide.type == slide_type and slide.category == "builtin":
                 return slide
         return None
 
     def get_layout_index(self, slide_type: str, fallback: int = 1) -> int:
-        """
-        Get layout index for a slide type with fallback.
-
-        Args:
-            slide_type: The slide type to look up
-            fallback: Default layout index if not found or invalid
-
-        Returns:
-            Layout index to use
-        """
+        """Get layout index for a slide type with fallback."""
         config = self.get_slide_config(slide_type)
-        if not config or not config.enabled:
+        if not config:
             return fallback
 
-        # Validate layout exists in presentation
         if self.presentation:
             try:
                 layout_count = len(self.presentation.slide_layouts)
                 if config.layout_index >= layout_count:
                     logger.warning(
                         "Layout index %d for slide type '%s' exceeds available layouts (%d). Falling back to layout %d.",
-                        config.layout_index,
-                        slide_type,
-                        layout_count,
-                        fallback,
+                        config.layout_index, slide_type, layout_count, fallback,
                     )
                     return fallback
             except Exception as e:
@@ -172,15 +184,9 @@ class SlideMappingManager:
 
         return config.layout_index
 
-    def is_slide_enabled(self, slide_type: str) -> bool:
-        """Check if a slide type is enabled."""
-        config = self.get_slide_config(slide_type)
-        return config.enabled if config else True
-
     def get_slides_by_position(self) -> List[SlideConfig]:
-        """Get all enabled slides sorted by position."""
-        enabled = [s for s in self.slides if s.enabled]
-        return sorted(enabled, key=lambda s: s.position)
+        """Get all slides sorted by position."""
+        return sorted(self.slides, key=lambda s: s.position)
 
     def validate(self) -> Tuple[List[str], List[str]]:
         """
@@ -193,70 +199,53 @@ class SlideMappingManager:
         errors = []
 
         # Check for duplicate positions
-        positions = [s.position for s in self.slides if s.enabled]
+        positions = [s.position for s in self.slides]
         if len(positions) != len(set(positions)):
             warnings.append("Duplicate position values found in slide mapping")
 
-        # Check for invalid slide types
+        # Check for duplicate built-in types
+        builtin_types_seen = set()
         for slide in self.slides:
-            if slide.type not in self.SLIDE_TYPES and not slide.type.startswith("custom_"):
-                warnings.append(f"Unknown slide type: {slide.type}")
-
-        # Check for invalid modes
-        for slide in self.slides:
-            if slide.mode not in ("static", "dynamic"):
-                errors.append(f"Invalid mode '{slide.mode}' for slide type {slide.type}")
+            if slide.category == "builtin":
+                if slide.type not in self.BUILTIN_TYPES:
+                    errors.append(f"Unknown built-in type: '{slide.type}'")
+                elif slide.type in builtin_types_seen:
+                    errors.append(f"Duplicate built-in type: '{slide.type}'")
+                else:
+                    builtin_types_seen.add(slide.type)
+            elif slide.category != "custom":
+                errors.append(f"Invalid category '{slide.category}' for slide '{slide.label}'")
 
         # Validate layout indices if presentation is available
         if self.presentation:
             try:
                 layout_count = len(self.presentation.slide_layouts)
                 for slide in self.slides:
-                    if slide.enabled and slide.layout_index >= layout_count:
+                    if slide.layout_index >= layout_count:
                         errors.append(
-                            f"Layout index {slide.layout_index} for slide type '{slide.type}' "
-                            f"exceeds available layouts (0-{layout_count-1})"
+                            f"Layout index {slide.layout_index} for slide '{slide.label}' "
+                            f"exceeds available layouts (0-{layout_count - 1})"
                         )
             except Exception as e:
                 logger.warning("Error validating layouts: %s", e)
-
-        # Check for required slide types
-        required_types = ["title", "final"]
-        for req_type in required_types:
-            config = self.get_slide_config(req_type)
-            if not config or not config.enabled:
-                warnings.append(f"Required slide type '{req_type}' is not enabled")
 
         return warnings, errors
 
     def to_dict(self) -> dict:
         """Export mapping to dictionary for JSON storage."""
         return {
-            "version": self.mapping_data.get("version", 1),
+            "version": 2,
             "slides": [s.to_dict() for s in self.slides],
         }
 
     @classmethod
     def extract_layouts_from_pptx(cls, pptx_path: str) -> List[Dict[str, any]]:
-        """
-        Extract layout information from a PPTX file.
-
-        Args:
-            pptx_path: Path to PPTX template file
-
-        Returns:
-            List of dicts with layout info: [{'index': 0, 'name': 'Title Slide'}, ...]
-        """
+        """Extract layout information from a PPTX file."""
         try:
             prs = Presentation(pptx_path)
             layouts = []
             for idx, layout in enumerate(prs.slide_layouts):
-                layouts.append(
-                    {
-                        "index": idx,
-                        "name": layout.name,
-                    }
-                )
+                layouts.append({"index": idx, "name": layout.name})
             return layouts
         except Exception as e:
             logger.exception("Failed to extract layouts from %s: %s", pptx_path, e)

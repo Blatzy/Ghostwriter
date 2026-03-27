@@ -31,10 +31,6 @@ class ProjectSlidesMixin:
 
     def create_title_slide(self, config, base_context, jinja_context):
         """Create the title slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -90,10 +86,6 @@ class ProjectSlidesMixin:
 
     def create_agenda_slide(self, config, base_context, jinja_context):
         """Create the agenda slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -121,10 +113,6 @@ class ProjectSlidesMixin:
 
     def create_introduction_slide(self, config, base_context, jinja_context):
         """Create the introduction/team slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -148,10 +136,6 @@ class ProjectSlidesMixin:
 
     def create_assessment_details_slide(self, config, base_context, jinja_context):
         """Create the assessment details slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -214,10 +198,6 @@ class ProjectSlidesMixin:
 
     def create_methodology_slide(self, config, base_context, jinja_context):
         """Create the methodology slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -228,10 +208,6 @@ class ProjectSlidesMixin:
 
     def create_timeline_slide(self, config, base_context, jinja_context):
         """Create the assessment timeline slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -285,10 +261,6 @@ class ProjectSlidesMixin:
 
     def create_attack_path_slide(self, config, base_context, jinja_context):
         """Create the attack path overview slide."""
-        if config.mode == "static":
-            create_static_slide(self.ppt_presentation, config.layout_index, self.jinja_env, jinja_context)
-            return
-
         slide_layout = self.ppt_presentation.slide_layouts[config.layout_index]
         slide = self.ppt_presentation.slides.add_slide(slide_layout)
         shapes = slide.shapes
@@ -303,33 +275,23 @@ class ExportProjectPptx(ExportBasePptx, ExportProjectBase, ProjectSlidesMixin):
         base_context = self.map_rich_texts()
         jinja_context = self.get_slide_context()
 
-        # Get enabled slides sorted by position
+        # Get slides sorted by position
         slides_config = self.slide_mapping_manager.get_slides_by_position()
 
-        # Process each slide type according to configuration
+        from ghostwriter.modules.reportwriter.base.slide_mapping import SlideMappingManager
+
         for slide_config in slides_config:
-            if not slide_config.enabled:
-                continue
-
-            slide_type = slide_config.type
-
-            # Route to appropriate creation method
-            if slide_type == "title":
-                self.create_title_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "agenda":
-                self.create_agenda_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "introduction":
-                self.create_introduction_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "assessment_details":
-                self.create_assessment_details_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "methodology":
-                self.create_methodology_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "timeline":
-                self.create_timeline_slide(slide_config, base_context, jinja_context)
-            elif slide_type == "attack_path":
-                self.create_attack_path_slide(slide_config, base_context, jinja_context)
-            elif slide_config.mode == "static":
-                # Handle custom static slides
+            if slide_config.category == "builtin":
+                type_info = SlideMappingManager.BUILTIN_TYPES.get(slide_config.type)
+                if type_info:
+                    handler = getattr(self, type_info["handler"], None)
+                    if handler:
+                        handler(slide_config, base_context, jinja_context)
+                    else:
+                        logger.warning("No handler method '%s' for built-in type '%s'", type_info["handler"], slide_config.type)
+                else:
+                    logger.warning("Unknown built-in slide type: %s", slide_config.type)
+            elif slide_config.category == "custom":
                 create_static_slide(
                     self.ppt_presentation,
                     slide_config.layout_index,
