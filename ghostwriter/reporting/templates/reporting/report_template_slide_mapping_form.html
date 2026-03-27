@@ -1,0 +1,612 @@
+{% extends "base_generic.html" %}
+
+{% block pagetitle %}Configure Slide Mapping{% endblock %}
+
+{% block breadcrumbs %}
+<nav aria-label="breadcrumb">
+    <ul class="breadcrumb">
+        <li class="breadcrumb-item"><a href="{% url 'home:dashboard' %}">Dashboard</a></li>
+        <li class="breadcrumb-item"><a href="{% url 'reporting:templates' %}">Templates</a></li>
+        <li class="breadcrumb-item"><a href="{% url 'reporting:template_detail' reporttemplate.id %}">{{ reporttemplate.name }}</a></li>
+        <li class="breadcrumb-item active">Slide Mapping</li>
+    </ul>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid">
+    <h2>Configure Slide Mapping: {{ reporttemplate.name }}</h2>
+
+    <p>Configure which layouts from your PPTX template should be used for each slide type, and customize the order of slide generation.</p>
+
+    {% if mapping_errors %}
+    <div class="alert alert-danger">
+        <strong>Errors in current mapping:</strong>
+        <ul>
+            {% for error in mapping_errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% if mapping_warnings %}
+    <div class="alert alert-warning">
+        <strong>Warnings:</strong>
+        <ul>
+            {% for warning in mapping_warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h4>Available Layouts in Template</h4>
+        </div>
+        <div class="card-body">
+            {% if available_layouts %}
+            <table class="table table-sm table-striped">
+                <thead>
+                    <tr>
+                        <th>Index</th>
+                        <th>Layout Name</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for layout in available_layouts %}
+                    <tr>
+                        <td><strong>{{ layout.index }}</strong></td>
+                        <td>{{ layout.name }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="text-muted">No layouts found in template</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <form method="post" id="slide-mapping-form">
+        {% csrf_token %}
+
+        <!-- Help Section -->
+        <div class="alert alert-info mb-4">
+            <h5><i class="fas fa-info-circle"></i> How to Use</h5>
+
+            <p><strong>Slide Modes:</strong></p>
+            <ul>
+                <li><strong>Dynamic:</strong> Creates multiple slides (one per finding/observation). Use Jinja2 variables in your layout.</li>
+                <li><strong>Static:</strong> Creates a single slide. Layout is copied as-is with Jinja2 variables replaced.</li>
+            </ul>
+
+            <p class="mb-0"><strong>Jinja2 Variables for Finding Slides (Dynamic mode):</strong></p>
+            <ul class="mb-1">
+                <li>{% verbatim %}<code>{{ title }}</code>, <code>{{ severity }}</code>, <code>{{ description }}</code>{% endverbatim %}</li>
+                <li>{% verbatim %}<code>{{ impact }}</code>, <code>{{ mitigation }}</code>, <code>{{ affected_entities }}</code>{% endverbatim %}</li>
+                <li>{% verbatim %}<code>{{ replication }}</code>, <code>{{ references }}</code>, <code>{{ cvss_score }}</code>{% endverbatim %}</li>
+            </ul>
+
+            <p class="mb-0"><strong>Jinja2 Variables for Observation Slides (Dynamic mode):</strong></p>
+            <ul class="mb-1">
+                <li>{% verbatim %}<code>{{ title }}</code>, <code>{{ description }}</code>{% endverbatim %}</li>
+            </ul>
+
+            <small class="text-muted">
+                <strong>Example:</strong> In your PowerPoint layout, add a text box with {% verbatim %}<code>{{ description }}</code>{% endverbatim %}
+                and it will be replaced with the finding's description.<br>
+                See <code>PPTX_SLIDE_MAPPING_GUIDE.md</code> for full documentation.
+            </small>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4>Slide Configuration</h4>
+                <p class="text-muted mb-0">Configure each slide type. Disabled slides will not be generated. Use ↑/↓ buttons to reorder.</p>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-bordered">
+                        <thead>
+                            <tr>
+                                <th>Slide Type</th>
+                                <th>Layout</th>
+                                <th>Mode</th>
+                                <th>Enabled</th>
+                                <th style="display: none;">Position</th>
+                                <th>Reorder</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr data-slide-type="title">
+                                <td><strong>Title Slide</strong></td>
+                                <td>{{ form.title_layout }}</td>
+                                <td>{{ form.title_mode }}</td>
+                                <td class="text-center">{{ form.title_enabled }}</td>
+                                <td style="display: none;">{{ form.title_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="title" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="title" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="agenda">
+                                <td><strong>Agenda</strong></td>
+                                <td>{{ form.agenda_layout }}</td>
+                                <td>{{ form.agenda_mode }}</td>
+                                <td class="text-center">{{ form.agenda_enabled }}</td>
+                                <td style="display: none;">{{ form.agenda_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="agenda" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="agenda" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="introduction">
+                                <td><strong>Team Introduction</strong></td>
+                                <td>{{ form.introduction_layout }}</td>
+                                <td>{{ form.introduction_mode }}</td>
+                                <td class="text-center">{{ form.introduction_enabled }}</td>
+                                <td style="display: none;">{{ form.introduction_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="introduction" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="introduction" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="assessment_details">
+                                <td><strong>Assessment Details</strong></td>
+                                <td>{{ form.assessment_details_layout }}</td>
+                                <td>{{ form.assessment_details_mode }}</td>
+                                <td class="text-center">{{ form.assessment_details_enabled }}</td>
+                                <td style="display: none;">{{ form.assessment_details_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="assessment_details" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="assessment_details" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="methodology">
+                                <td><strong>Methodology</strong></td>
+                                <td>{{ form.methodology_layout }}</td>
+                                <td>{{ form.methodology_mode }}</td>
+                                <td class="text-center">{{ form.methodology_enabled }}</td>
+                                <td style="display: none;">{{ form.methodology_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="methodology" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="methodology" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="timeline">
+                                <td><strong>Assessment Timeline</strong></td>
+                                <td>{{ form.timeline_layout }}</td>
+                                <td>{{ form.timeline_mode }}</td>
+                                <td class="text-center">{{ form.timeline_enabled }}</td>
+                                <td style="display: none;">{{ form.timeline_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="timeline" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="timeline" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="attack_path">
+                                <td><strong>Attack Path Overview</strong></td>
+                                <td>{{ form.attack_path_layout }}</td>
+                                <td>{{ form.attack_path_mode }}</td>
+                                <td class="text-center">{{ form.attack_path_enabled }}</td>
+                                <td style="display: none;">{{ form.attack_path_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="attack_path" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="attack_path" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="observations_overview">
+                                <td><strong>Positive Observations Overview</strong></td>
+                                <td>{{ form.observations_overview_layout }}</td>
+                                <td>{{ form.observations_overview_mode }}</td>
+                                <td class="text-center">{{ form.observations_overview_enabled }}</td>
+                                <td style="display: none;">{{ form.observations_overview_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="observations_overview" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="observations_overview" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="observation">
+                                <td><strong>Individual Observation Slide</strong></td>
+                                <td>{{ form.observation_layout }}</td>
+                                <td>{{ form.observation_mode }}</td>
+                                <td class="text-center">{{ form.observation_enabled }}</td>
+                                <td style="display: none;">{{ form.observation_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="observation" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="observation" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="findings_overview">
+                                <td><strong>Findings Overview</strong></td>
+                                <td>{{ form.findings_overview_layout }}</td>
+                                <td>{{ form.findings_overview_mode }}</td>
+                                <td class="text-center">{{ form.findings_overview_enabled }}</td>
+                                <td style="display: none;">{{ form.findings_overview_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="findings_overview" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="findings_overview" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="finding">
+                                <td><strong>Individual Finding Slide</strong></td>
+                                <td>{{ form.finding_layout }}</td>
+                                <td>{{ form.finding_mode }}</td>
+                                <td class="text-center">{{ form.finding_enabled }}</td>
+                                <td style="display: none;">{{ form.finding_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="finding" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="finding" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="recommendations">
+                                <td><strong>Recommendations</strong></td>
+                                <td>{{ form.recommendations_layout }}</td>
+                                <td>{{ form.recommendations_mode }}</td>
+                                <td class="text-center">{{ form.recommendations_enabled }}</td>
+                                <td style="display: none;">{{ form.recommendations_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="recommendations" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="recommendations" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="next_steps">
+                                <td><strong>Next Steps</strong></td>
+                                <td>{{ form.next_steps_layout }}</td>
+                                <td>{{ form.next_steps_mode }}</td>
+                                <td class="text-center">{{ form.next_steps_enabled }}</td>
+                                <td style="display: none;">{{ form.next_steps_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="next_steps" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="next_steps" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr data-slide-type="final">
+                                <td><strong>Final/Closing Slide</strong></td>
+                                <td>{{ form.final_layout }}</td>
+                                <td>{{ form.final_mode }}</td>
+                                <td class="text-center">{{ form.final_enabled }}</td>
+                                <td style="display: none;">{{ form.final_position }}</td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-secondary move-up" data-slide="final" title="Move up">
+                                        <i class="fas fa-arrow-up"></i>
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-secondary move-down" data-slide="final" title="Move down">
+                                        <i class="fas fa-arrow-down"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h4 class="mb-0">Custom Slides</h4>
+                <button type="button" class="btn btn-sm btn-success" id="add-custom-slide">
+                    <i class="fas fa-plus"></i> Add Custom Slide
+                </button>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">Add custom static slides (e.g., team presentation, methodology) with Jinja2 template support.</p>
+                <div id="custom-slides-container"></div>
+
+                <!-- Hidden field to store JSON -->
+                <input type="hidden" name="custom_slides" id="custom-slides-json" value='{{ form.custom_slides.value|default:"[]" }}'>
+
+                {% if form.custom_slides.errors %}
+                    <div class="alert alert-danger mt-3">{{ form.custom_slides.errors }}</div>
+                {% endif %}
+
+                <div class="mt-3">
+                    <small class="text-muted">
+                        <strong>Available Jinja2 variables for static slides:</strong><br>
+                        {% verbatim %}
+                        <strong>Client:</strong> <code>{{client.name}}</code>, <code>{{client.short_name}}</code><br>
+                        <strong>Project:</strong> <code>{{project.codename}}</code>, <code>{{project.type}}</code>, <code>{{project.start_date}}</code>, <code>{{project.end_date}}</code><br>
+                        <strong>Report:</strong> <code>{{report.title}}</code>, <code>{{report.complete_date}}</code><br>
+                        <strong>Company:</strong> <code>{{company.name}}</code>, <code>{{company.email}}</code><br>
+                        <strong>Other:</strong> <code>{{now}}</code> (current date/time)
+                        {% endverbatim %}
+                    </small>
+                </div>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <button type="submit" class="btn btn-primary">
+                <i class="fas fa-save"></i> Save Slide Mapping
+            </button>
+            <a href="{% url 'reporting:template_detail' reporttemplate.id %}" class="btn btn-secondary">
+                <i class="fas fa-times"></i> Cancel
+            </a>
+        </div>
+    </form>
+</div>
+
+<style>
+    .table input[type="number"] {
+        width: 80px;
+    }
+    .table select {
+        width: 100%;
+    }
+    .table input[type="checkbox"] {
+        transform: scale(1.2);
+    }
+    tr.disabled-slide {
+        opacity: 0.5;
+        background-color: #f8f9fa;
+    }
+    tr.disabled-slide td {
+        color: #6c757d;
+    }
+    .move-up, .move-down {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.875rem;
+        margin: 0 2px;
+    }
+    td.text-center .btn-group {
+        display: inline-flex;
+    }
+</style>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // === GRAYING DISABLED SLIDES ===
+    function updateRowStyling() {
+        const checkboxes = document.querySelectorAll('input[type="checkbox"][id$="_enabled"]');
+        checkboxes.forEach(function(checkbox) {
+            const row = checkbox.closest('tr');
+            if (row) {
+                if (!checkbox.checked) {
+                    row.classList.add('disabled-slide');
+                } else {
+                    row.classList.remove('disabled-slide');
+                }
+            }
+        });
+    }
+
+    updateRowStyling();
+    const checkboxes = document.querySelectorAll('input[type="checkbox"][id$="_enabled"]');
+    checkboxes.forEach(function(checkbox) {
+        checkbox.addEventListener('change', updateRowStyling);
+    });
+
+    // === CUSTOM SLIDES MANAGEMENT ===
+    const availableLayouts = {{ available_layouts|safe }};
+    let customSlides = [];
+
+    // Load existing custom slides
+    try {
+        const jsonValue = document.getElementById('custom-slides-json').value;
+        customSlides = JSON.parse(jsonValue) || [];
+    } catch (e) {
+        customSlides = [];
+    }
+
+    function renderCustomSlides() {
+        const container = document.getElementById('custom-slides-container');
+        container.innerHTML = '';
+
+        if (customSlides.length === 0) {
+            container.innerHTML = '<p class="text-muted">No custom slides yet. Click "Add Custom Slide" to create one.</p>';
+            return;
+        }
+
+        customSlides.forEach((slide, index) => {
+            const slideCard = document.createElement('div');
+            slideCard.className = 'card mb-3';
+            slideCard.innerHTML = `
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h6 class="mb-0">Custom Slide ${index + 1}</h6>
+                    <button type="button" class="btn btn-sm btn-danger remove-custom-slide" data-index="${index}">
+                        <i class="fas fa-trash"></i> Remove
+                    </button>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-3">
+                            <label>Type/Name</label>
+                            <input type="text" class="form-control custom-slide-type" data-index="${index}"
+                                   value="${slide.type || ''}" placeholder="e.g., team_presentation">
+                            <small class="text-muted">Unique identifier (no spaces)</small>
+                        </div>
+                        <div class="col-md-3">
+                            <label>Layout</label>
+                            <select class="form-control custom-slide-layout" data-index="${index}">
+                                ${availableLayouts.map(layout =>
+                                    `<option value="${layout.index}" ${slide.layout_index == layout.index ? 'selected' : ''}>
+                                        ${layout.index}: ${layout.name}
+                                    </option>`
+                                ).join('')}
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label>Mode</label>
+                            <select class="form-control custom-slide-mode" data-index="${index}">
+                                <option value="static" ${slide.mode === 'static' ? 'selected' : ''}>Static</option>
+                                <option value="dynamic" ${slide.mode === 'dynamic' ? 'selected' : ''}>Dynamic</option>
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label>Position</label>
+                            <input type="number" class="form-control custom-slide-position" data-index="${index}"
+                                   value="${slide.position || 1}" min="1">
+                        </div>
+                        <div class="col-md-2">
+                            <label>Enabled</label><br>
+                            <input type="checkbox" class="custom-slide-enabled" data-index="${index}"
+                                   ${slide.enabled ? 'checked' : ''}>
+                        </div>
+                    </div>
+                </div>
+            `;
+            container.appendChild(slideCard);
+        });
+
+        // Attach event listeners
+        document.querySelectorAll('.remove-custom-slide').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const index = parseInt(this.dataset.index);
+                customSlides.splice(index, 1);
+                updateCustomSlidesJSON();
+                renderCustomSlides();
+            });
+        });
+
+        document.querySelectorAll('.custom-slide-type, .custom-slide-layout, .custom-slide-mode, .custom-slide-position, .custom-slide-enabled').forEach(input => {
+            input.addEventListener('change', function() {
+                const index = parseInt(this.dataset.index);
+                const field = this.classList[1].replace('custom-slide-', '');
+
+                if (field === 'type') {
+                    customSlides[index].type = this.value;
+                } else if (field === 'layout') {
+                    customSlides[index].layout_index = parseInt(this.value);
+                } else if (field === 'mode') {
+                    customSlides[index].mode = this.value;
+                } else if (field === 'position') {
+                    customSlides[index].position = parseInt(this.value);
+                } else if (field === 'enabled') {
+                    customSlides[index].enabled = this.checked;
+                }
+
+                updateCustomSlidesJSON();
+            });
+        });
+    }
+
+    function updateCustomSlidesJSON() {
+        document.getElementById('custom-slides-json').value = JSON.stringify(customSlides);
+    }
+
+    document.getElementById('add-custom-slide').addEventListener('click', function() {
+        customSlides.push({
+            type: 'custom_' + (customSlides.length + 1),
+            layout_index: availableLayouts.length > 0 ? availableLayouts[0].index : 0,
+            mode: 'static',
+            enabled: true,
+            position: 100 + customSlides.length
+        });
+        updateCustomSlidesJSON();
+        renderCustomSlides();
+    });
+
+    // Initial render
+    renderCustomSlides();
+
+    // === REORDERING FUNCTIONALITY ===
+    function updateAllPositions() {
+        // Update position values based on current row order in table
+        const tbody = document.querySelector('.table-bordered tbody');
+        const rows = tbody.querySelectorAll('tr[data-slide-type]');
+
+        rows.forEach((row, index) => {
+            const slideType = row.dataset.slideType;
+            const positionInput = document.getElementById(`id_${slideType}_position`);
+            if (positionInput) {
+                positionInput.value = index + 1;
+            }
+        });
+    }
+
+    function moveRowUp(row) {
+        const previousRow = row.previousElementSibling;
+        if (previousRow) {
+            row.parentNode.insertBefore(row, previousRow);
+            updateAllPositions();
+        }
+    }
+
+    function moveRowDown(row) {
+        const nextRow = row.nextElementSibling;
+        if (nextRow) {
+            row.parentNode.insertBefore(nextRow, row);
+            updateAllPositions();
+        }
+    }
+
+    // Attach event listeners to all move buttons
+    document.querySelectorAll('.move-up').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const slideType = this.dataset.slide;
+            const row = document.querySelector(`tr[data-slide-type="${slideType}"]`);
+            if (row) {
+                moveRowUp(row);
+            }
+        });
+    });
+
+    document.querySelectorAll('.move-down').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const slideType = this.dataset.slide;
+            const row = document.querySelector(`tr[data-slide-type="${slideType}"]`);
+            if (row) {
+                moveRowDown(row);
+            }
+        });
+    });
+
+    // Initialize positions based on initial order
+    updateAllPositions();
+});
+</script>
+{% endblock %}
