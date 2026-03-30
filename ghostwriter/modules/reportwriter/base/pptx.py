@@ -492,56 +492,76 @@ def add_paragraph_preserving_format(text_frame, text, level=0):
 
 def copy_text_from_layout_preserving_format(dest_shape, source_ph):
     """
-    Copy text and formatting from a layout placeholder to a slide shape.
-    Preserves paragraphs, runs, and font properties.
+    Copy text and ALL formatting from a layout placeholder to a slide shape.
+    Uses XML-level deep copy to preserve every property: paragraph spacing,
+    indentation, bullet styles, run formatting, colors, fonts, etc.
     """
     if not source_ph.has_text_frame or not dest_shape.has_text_frame:
         return
 
-    src_tf = source_ph.text_frame
-    dest_tf = dest_shape.text_frame
-    
-    # Clear existing text
-    dest_tf.clear()
-    
-    for i, src_p in enumerate(src_tf.paragraphs):
-        if i == 0 and len(dest_tf.paragraphs) > 0:
-            dest_p = dest_tf.paragraphs[0]
-        else:
-            dest_p = dest_tf.add_paragraph()
-            
-        # Copy paragraph properties
-        dest_p.alignment = src_p.alignment
-        dest_p.level = src_p.level
-        
-        # Copy runs
-        for src_r in src_p.runs:
-            dest_r = dest_p.add_run()
-            dest_r.text = src_r.text
-            
-            # Copy font properties
-            src_font = src_r.font
-            dest_font = dest_r.font
-            
-            dest_font.name = src_font.name
-            dest_font.size = src_font.size
-            dest_font.bold = src_font.bold
-            dest_font.italic = src_font.italic
-            dest_font.underline = src_font.underline
-            
-            # Copy color if set
-            if src_font.color and src_font.color.type:
-                try:
-                    if src_font.color.type == 1: # RGB
-                        dest_font.color.rgb = src_font.color.rgb
-                    elif src_font.color.type == 2: # THEME
-                        dest_font.color.theme_color = src_font.color.theme_color
-                except AttributeError:
-                    pass
+    import copy as copy_module
+
+    src_txBody = source_ph.text_frame._txBody
+    dest_txBody = dest_shape.text_frame._txBody
+
+    nsmap = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
+
+    # Remove existing paragraphs from destination
+    for p in dest_txBody.findall('a:p', nsmap):
+        dest_txBody.remove(p)
+
+    # Deep copy all paragraphs from source, preserving ALL XML properties
+    for p in src_txBody.findall('a:p', nsmap):
+        dest_txBody.append(copy_module.deepcopy(p))
+
+def _merge_split_jinja2_runs(paragraph):
+    """
+    Fix Jinja2 expressions that PowerPoint has split across multiple runs.
+
+    Example: Run["{{ proj"], Run["ect.name }}"] → Run["{{ project.name }}"]
+    The merged run keeps the formatting of the first run in the group.
+
+    Returns the updated list of runs.
+    """
+    runs = list(paragraph.runs)
+    i = 0
+    while i < len(runs):
+        text = runs[i].text
+        open_count = text.count('{{')
+        close_count = text.count('}}')
+
+        if open_count > close_count:
+            # Unbalanced opening — merge with following runs until balanced
+            j = i + 1
+            merged_text = text
+            balanced = False
+            while j < len(runs):
+                merged_text += runs[j].text
+                j += 1
+                if merged_text.count('{{') <= merged_text.count('}}'):
+                    balanced = True
+                    break
+
+            if balanced:
+                runs[i].text = merged_text
+                for k in range(i + 1, j):
+                    r_elem = runs[k]._r
+                    r_elem.getparent().remove(r_elem)
+                runs = list(paragraph.runs)
+                continue  # Re-check current index with updated runs
+
+        i += 1
+
+    return runs
+
 
 def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, context: dict, slide, shape, evidences=None):
     """
-    Render Jinja2 templates in all paragraphs of a text frame.
+    Render Jinja2 templates in all paragraphs of a text frame,
+    preserving the formatting of each individual run (segment).
+
+    Each run is processed independently: only its text content is replaced,
+    while all formatting properties (font, color, size, bold, etc.) are kept intact.
 
     Args:
         text_frame: PPTX text frame object
@@ -555,81 +575,67 @@ def render_jinja2_in_textframe(text_frame, jinja_env: jinja2.Environment, contex
         evidences = {}
 
     for p in text_frame.paragraphs:
-        # Reconstruct the full text of the paragraph from its runs
-        original_text = "".join(r.text for r in p.runs).replace('\xa0', ' ')
-        
-        if original_text and "{{" in original_text and "}}" in original_text:
-            try:
-                template = jinja_env.from_string(original_text)
-                rendered_text = template.render(context)
+        runs = list(p.runs)
+        if not runs:
+            continue
 
-                # Heuristic to check for leftover Jinja variables
-                if '{{' in rendered_text and '}}' in rendered_text:
+        full_text = "".join(r.text for r in runs)
+        if "{{" not in full_text or "}}" not in full_text:
+            continue
+
+        # Step 1: Fix Jinja2 expressions that PowerPoint split across runs
+        runs = _merge_split_jinja2_runs(p)
+
+        # Step 2: Render Jinja2 in each run individually, preserving its formatting
+        for run in runs:
+            text = run.text
+            if "{{" not in text or "}}" not in text:
+                continue
+
+            try:
+                # Replace non-breaking spaces for Jinja2 parsing
+                jinja_text = text.replace('\xa0', ' ')
+                template = jinja_env.from_string(jinja_text)
+                rendered = template.render(context)
+
+                # Warn about possible unresolved variables
+                if '{{' in rendered and '}}' in rendered:
                     logger.warning(
                         "Jinja2 variable may not have been replaced in '%s'. Available keys: %s",
-                        original_text[:100],
+                        text[:100],
                         list(context.keys())
                     )
 
-                # Simple check to see if rendered text is HTML
-                is_html = bool(BeautifulSoup(rendered_text, "html.parser").find())
+                # Check if rendered text contains HTML
+                is_html = bool(BeautifulSoup(rendered, "html.parser").find())
 
-                # Preserve formatting of the first run
-                font_props = {}
-                if p.runs:
-                    font = p.runs[0].font
-                    font_props = {
-                        'name': font.name,
-                        'size': font.size,
-                        'bold': font.bold,
-                        'italic': font.italic,
-                        'underline': font.underline,
-                        'color': font.color if font.color.type else None
-                    }
-
-                # Clear all runs from the paragraph
-                for r in list(p.runs):
-                    p._p.remove(r._r)
-                
                 if is_html:
-                    # Use HtmlToPptx to render the HTML
-                    HtmlToPptxWithEvidence.run(rendered_text, slide, shape, evidences=evidences)
-                    # If our current paragraph is now empty, we can try to remove it
-                    if not p.text.strip():
-                        delete_paragraph(p)
+                    # HTML content needs the dedicated renderer.
+                    # Remove this run and render HTML into the shape.
+                    run._r.getparent().remove(run._r)
+                    HtmlToPptxWithEvidence.run(rendered, slide, shape, evidences=evidences)
                 else:
-                    # Just set the text with preserved formatting
-                    new_run = p.add_run()
-                    new_run.text = rendered_text
-                    
-                    # Re-apply font properties
-                    if font_props:
-                        new_run.font.name = font_props.get('name')
-                        new_run.font.size = font_props.get('size')
-                        new_run.font.bold = font_props.get('bold')
-                        new_run.font.italic = font_props.get('italic')
-                        new_run.font.underline = font_props.get('underline')
-                        
-                        original_color = font_props.get('color')
-                        if original_color:
-                            try:
-                                if original_color.type == 1: # RGB
-                                    new_run.font.color.rgb = original_color.rgb
-                                elif original_color.type == 2: # THEME
-                                    new_run.font.color.theme_color = original_color.theme_color
-                            except AttributeError:
-                                pass
+                    # Plain text: replace text content, formatting is preserved automatically
+                    run.text = rendered
 
             except jinja2.exceptions.UndefinedError as e:
                 logger.error(
                     "Jinja2 undefined variable in '%s': %s. Available context keys: %s",
-                    original_text[:100], str(e), list(context.keys())
+                    text[:100], str(e), list(context.keys())
                 )
             except Exception as e:
                 logger.warning(
-                    "Failed to render Jinja2 in paragraph '%s': %s",
-                    original_text[:100], e
+                    "Failed to render Jinja2 in run '%s': %s",
+                    text[:100], e
                 )
+
+        # Clean up: if paragraph has no content left after HTML rendering, remove it
+        if not any(r.text.strip() for r in p.runs):
+            if p.text.strip() == "":
+                try:
+                    delete_paragraph(p)
+                except Exception:
+                    pass
 
 def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict, slide, evidences=None):
     """
@@ -654,7 +660,7 @@ def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict, 
                         layout_ph = ph
                         break
                 
-                if layout_ph and layout_ph.has_text_frame and layout_ph.text and "{{" in layout_ph.text:
+                if layout_ph and layout_ph.has_text_frame and layout_ph.text:
                     copy_text_from_layout_preserving_format(shape, layout_ph)
 
             except (KeyError, AttributeError, Exception):

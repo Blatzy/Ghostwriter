@@ -127,7 +127,7 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             # creates empty placeholders that don't inherit layout text
             for shape in observation_slide.placeholders:
                 if shape.placeholder_format.idx == 0 and shape.has_text_frame:
-                    shape.text_frame.text = observation.get("title", "")
+                    set_text_preserving_format(shape, observation.get("title", ""))
                     break
 
             # Render Jinja2 variables in all shapes of the slide
@@ -245,7 +245,7 @@ class ExportReportPptx(ExportBasePptx, ExportReportBase, ProjectSlidesMixin):
             # creates empty placeholders that don't inherit layout text
             for shape in finding_slide.placeholders:
                 if shape.placeholder_format.idx == 0 and shape.has_text_frame:
-                    shape.text_frame.text = finding.get("title", "")
+                    set_text_preserving_format(shape, finding.get("title", ""))
                     break
 
             # Render Jinja2 variables in all shapes of the slide

@@ -140,7 +140,7 @@ class HtmlToPptx(BaseHtmlToOOXML):
 
     def tag_ul(self, el, *, par=None, list_level=None, **kwargs):
         if list_level is None:
-            next_list_level = 1
+            next_list_level = 0
         else:
             next_list_level = list_level + 1
 
