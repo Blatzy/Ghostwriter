@@ -493,7 +493,8 @@ def add_paragraph_preserving_format(text_frame, text, level=0):
 def copy_text_from_layout_preserving_format(dest_shape, source_ph):
     """
     Copy text and ALL formatting from a layout placeholder to a slide shape.
-    Uses XML-level deep copy to preserve every property: paragraph spacing,
+    Replaces the entire txBody content (bodyPr + lstStyle + paragraphs) to
+    preserve every property: margins, autofit, wrap, anchor, paragraph spacing,
     indentation, bullet styles, run formatting, colors, fonts, etc.
     """
     if not source_ph.has_text_frame or not dest_shape.has_text_frame:
@@ -506,11 +507,32 @@ def copy_text_from_layout_preserving_format(dest_shape, source_ph):
 
     nsmap = {'a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}
 
+    # Copy bodyPr from source to preserve text frame properties
+    # (margins, autofit, wrap, anchor, etc.)
+    src_bodyPr = src_txBody.find('a:bodyPr', nsmap)
+    dest_bodyPr = dest_txBody.find('a:bodyPr', nsmap)
+    if src_bodyPr is not None and dest_bodyPr is not None:
+        new_bodyPr = copy_module.deepcopy(src_bodyPr)
+        dest_txBody.replace(dest_bodyPr, new_bodyPr)
+
+    # Copy lstStyle from source to preserve list/bullet styles
+    src_lstStyle = src_txBody.find('a:lstStyle', nsmap)
+    dest_lstStyle = dest_txBody.find('a:lstStyle', nsmap)
+    if src_lstStyle is not None:
+        new_lstStyle = copy_module.deepcopy(src_lstStyle)
+        if dest_lstStyle is not None:
+            dest_txBody.replace(dest_lstStyle, new_lstStyle)
+        else:
+            # Insert lstStyle before paragraphs
+            bodyPr = dest_txBody.find('a:bodyPr', nsmap)
+            if bodyPr is not None:
+                bodyPr.addnext(new_lstStyle)
+
     # Remove existing paragraphs from destination
     for p in dest_txBody.findall('a:p', nsmap):
         dest_txBody.remove(p)
 
-    # Deep copy all paragraphs from source, preserving ALL XML properties
+    # Deep copy all paragraphs from source
     for p in src_txBody.findall('a:p', nsmap):
         dest_txBody.append(copy_module.deepcopy(p))
 
@@ -655,16 +677,31 @@ def render_jinja2_in_shape(shape, jinja_env: jinja2.Environment, context: dict, 
             try:
                 layout_ph = None
                 target_idx = shape.placeholder_format.idx
+                logger.debug(
+                    "Slide placeholder '%s' (idx=%s) is empty, looking for layout match",
+                    shape.name, target_idx
+                )
                 for ph in slide.slide_layout.placeholders:
+                    logger.debug(
+                        "  Layout placeholder '%s' (idx=%s): text='%s'",
+                        ph.name, ph.placeholder_format.idx, ph.text[:50] if ph.text else "(empty)"
+                    )
                     if ph.placeholder_format.idx == target_idx:
                         layout_ph = ph
                         break
-                
-                if layout_ph and layout_ph.has_text_frame and layout_ph.text:
-                    copy_text_from_layout_preserving_format(shape, layout_ph)
 
-            except (KeyError, AttributeError, Exception):
-                pass
+                if layout_ph and layout_ph.has_text_frame and layout_ph.text:
+                    logger.debug(
+                        "  -> Copying from layout '%s' (idx=%s) to slide '%s' (idx=%s)",
+                        layout_ph.name, layout_ph.placeholder_format.idx,
+                        shape.name, target_idx
+                    )
+                    copy_text_from_layout_preserving_format(shape, layout_ph)
+                else:
+                    logger.debug("  -> No matching layout placeholder found for idx=%s", target_idx)
+
+            except (KeyError, AttributeError, Exception) as e:
+                logger.warning("Error copying layout text for placeholder '%s': %s", shape.name, e)
 
         render_jinja2_in_textframe(shape.text_frame, jinja_env, context, slide, shape, evidences=evidences)
 
